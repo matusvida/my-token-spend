@@ -1,4 +1,5 @@
 import html
+from collections import Counter
 from datetime import datetime, timezone
 
 
@@ -528,9 +529,18 @@ def _stamp_text(seconds, same_day):
     return moment.strftime("%H:%M") if same_day else moment.strftime("%m-%d %H:%M")
 
 
+def run_labels(runs):
+    short = shorten_labels([run["label"] for run in runs], LABEL_CHARS)
+    seen = Counter(short)
+    return [
+        "%s %s" % (label, _clock(run["first_ts"])) if seen[label] > 1 else label
+        for run, label in zip(runs, short)
+    ]
+
+
 def _runs_by_turns(chart, label_width, row_height):
     ordered = sorted(chart["runs"], key=lambda run: (-run["turns"], run["first_ts"]))
-    short = shorten_labels([run["label"] for run in ordered], LABEL_CHARS)
+    short = run_labels(ordered)
     rows = [
         {
             "label": label,
@@ -560,7 +570,7 @@ def svg_run_timeline(chart, label_width=300, row_height=26):
     height = MARGIN["top"] + row_height * len(runs) + 44
     starts, ends, origin, span, track = _timeline_extent(chart, label_width)
     busiest = max(run["turns"] for run in runs)
-    short = shorten_labels([run["label"] for run in runs], LABEL_CHARS)
+    short = run_labels(runs)
     parts = []
     for index, run in enumerate(runs):
         thickness = 6.0 + 12.0 * (run["turns"] / busiest if busiest else 0.0)

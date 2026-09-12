@@ -1497,3 +1497,25 @@ def test_the_mismatch_chart_survives_a_config_without_a_thinking_threshold():
         entry.update({"output": 100, "thinking": 20, "model": "claude-opus-5"})
     chart = evidence._mismatch_chart(records, config)
     assert chart["box"]["thinking"] == rules.MAX_THINKING_DEFAULT
+
+
+def test_runs_sharing_one_derived_label_are_told_apart_by_their_start_clock():
+    import charts
+
+    runs = [
+        {
+            "label": "file reads and searches in pps on cti-12375",
+            "named": False,
+            "first_ts": "2026-09-08T1%d:00:00+00:00" % index,
+            "last_ts": "2026-09-08T1%d:40:00+00:00" % index,
+            "turns": 5,
+            "weighted": 100.0,
+            "agent": "general-purpose",
+        }
+        for index in range(3)
+    ]
+    labels = charts.run_labels(runs)
+    assert len(set(labels)) == 3
+    assert labels[0].endswith(" 10:00")
+    runs[0]["label"] = "a different job entirely"
+    assert charts.run_labels(runs)[0] == "a different job entirely"
