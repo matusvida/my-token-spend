@@ -610,7 +610,7 @@ def _described_runs(count):
 
 def test_the_default_cluster_cap_keeps_twelve_named_jobs():
     assert CONFIG["rootcause"]["max_clusters"] == 12
-    assert rootcause._settings({})["max_clusters"] == 12
+    assert rootcause.settings({})["max_clusters"] == 12
 
 
 def test_clusters_beyond_the_cap_collapse_into_a_tail_that_counts_its_runs():

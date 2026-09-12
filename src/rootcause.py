@@ -879,7 +879,7 @@ def _index(records, config, max_clusters, agent_calls=None):
     }
 
 
-def _settings(config):
+def settings(config):
     shipped = {
         "min_centre_share": 0.03,
         "max_centres": 6,
@@ -892,8 +892,8 @@ def _settings(config):
 
 
 def explain(window, records, config, agent_calls=None):
-    settings = _settings(config)
-    index = _index(records, config, settings["max_clusters"], agent_calls)
+    limits = settings(config)
+    index = _index(records, config, limits["max_clusters"], agent_calls)
     out = []
     for finding in window["findings"]:
         builder = BECAUSE_BUILDERS.get(finding["rule"])
@@ -905,9 +905,9 @@ def explain(window, records, config, agent_calls=None):
 
 
 def centres(window, records, config, agent_calls=None):
-    settings = _settings(config)
+    limits = settings(config)
     total = window["totals"]["weighted"] or 0.0
-    floor = total * settings["min_centre_share"]
+    floor = total * limits["min_centre_share"]
     found = []
     agents = defaultdict(list)
     skills = defaultdict(list)
@@ -921,7 +921,7 @@ def centres(window, records, config, agent_calls=None):
             weighted = sum(record["weighted"] for record in turns)
             if weighted < floor:
                 continue
-            runs = group_runs(turns, key=key, label_chars=settings["label_chars"], agent_calls=agent_calls)
+            runs = group_runs(turns, key=key, label_chars=limits["label_chars"], agent_calls=agent_calls)
             ungrouped = [record for record in turns if not record.get(key)]
             found.append(
                 {
@@ -932,7 +932,7 @@ def centres(window, records, config, agent_calls=None):
                     "turns": len(turns),
                     "runs": len(runs),
                     "run_unit": "run" if key == RUN_ID_KEY else "session",
-                    "clusters": cluster_runs(runs, max_clusters=settings["max_clusters"]),
+                    "clusters": cluster_runs(runs, max_clusters=limits["max_clusters"]),
                     "coverage": coverage(turns),
                     "descriptions": description_coverage(runs),
                     "ungrouped_turns": len(ungrouped),
@@ -942,7 +942,7 @@ def centres(window, records, config, agent_calls=None):
                 }
             )
     found.sort(key=lambda centre: (-centre["weighted"], centre["name"]))
-    return found[: settings["max_centres"]]
+    return found[: limits["max_centres"]]
 
 
 def analyse(window, records, config, agent_calls=None):
@@ -953,7 +953,7 @@ def analyse(window, records, config, agent_calls=None):
         "records": len(records),
         "coverage": coverage(records),
         "labels": label_capture(records, config),
-        "max_findings": _settings(config)["max_findings"],
+        "max_findings": settings(config)["max_findings"],
         "becauses": explain(window, records, config, agent_calls),
         "centres": centres(window, records, config, agent_calls),
         "runs": len(runs),
