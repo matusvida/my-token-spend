@@ -734,9 +734,9 @@ def test_tune_has_no_flag_that_applies_anything():
     }
 
 
-def test_neither_tune_module_contains_a_file_writing_call():
+def test_no_module_on_the_tune_path_contains_a_file_writing_call():
     src = Path(__file__).resolve().parents[1] / "src"
-    for name in ("tune.py", "rules.py"):
+    for name in ("tune.py", "rules.py", "agentfiles.py", "advice.py"):
         source = (src / name).read_text(encoding="utf-8")
         for forbidden in ("write_text(", "write_bytes(", "os.replace", "shutil.", "unlink(", "mkdir("):
             assert forbidden not in source, "%s in %s" % (forbidden, name)
