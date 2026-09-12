@@ -1941,3 +1941,10 @@ def test_the_burn_ceiling_label_sits_clear_of_the_endpoint_value():
     reference = re.search(r'<text class="reference-label" x="([0-9.]+)"[^>]*text-anchor="(\w+)">estimated', svg)
     assert reference.group(2) == "start"
     assert float(reference.group(1)) < charts.PLOT_WIDTH / 2
+
+
+def test_the_whale_legend_drops_a_class_that_clears_the_share_but_not_a_pixel():
+    chart = _whale_bars([[0.0, 6_010_198.0, 34_500.0, 10.0]] * 5)
+    html = report._whale_chart_html(chart)
+    assert _swatches(html) == ["--series-1"]
+    assert "Smaller classes omitted." in html

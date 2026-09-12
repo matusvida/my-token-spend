@@ -197,10 +197,21 @@ def _grid_and_ticks(ticks, top_tick, left, top, plot_height):
     return "".join(parts)
 
 
+def _column_ticks(categories, reference=None):
+    return nice_ticks(max([sum(item["parts"]) for item in categories] + [reference or 0.0]))
+
+
+def column_heights(categories, index, reference=None, height=PLOT_HEIGHT):
+    _, _, _, plot_height = _plot_box(height)
+    top_tick = _column_ticks(categories, reference)[-1]
+    if not top_tick:
+        return [0.0 for _ in categories]
+    return [item["parts"][index] / top_tick * plot_height for item in categories]
+
+
 def svg_stacked_columns(categories, series, reference=None, height=PLOT_HEIGHT):
     left, top, width, plot_height = _plot_box(height)
-    maximum = max([sum(item["parts"]) for item in categories] + [reference or 0.0])
-    ticks = nice_ticks(maximum)
+    ticks = _column_ticks(categories, reference)
     top_tick = ticks[-1]
 
     def scaled(value):

@@ -520,9 +520,10 @@ detectors get tables.
 **A legend names what is drawn, and only what is readable.** Every colour a chart paints carries a
 legend entry: the context-bloat chart colours the five largest tools and folds the rest, including
 turns led by no single tool, into one grey *other or unattributed* entry. Nothing is listed that has
-no mark, and a whale-turn class holding under `report.WHALE_LEGEND_SHARE` (0.5%) of the drawn total
-is dropped from the legend because it renders sub-pixel; the footer then says smaller classes were
-omitted. The marks themselves are never removed.
+no mark, and a whale-turn class is dropped from the legend when it holds under
+`report.WHALE_LEGEND_SHARE` (0.5%) of the drawn total or its tallest segment cannot reach
+`report.WHALE_LEGEND_PIXELS` (2) plot units; either way it renders as a hairline nobody can find,
+and the footer then says smaller classes were omitted. The marks themselves are never removed.
 
 **No two rows carry the same label.** `charts.distinct_labels` elides the prefix and suffix shared by
 every label, and where that still leaves duplicates it re-elides within the colliding group alone and

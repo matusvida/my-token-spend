@@ -1537,6 +1537,8 @@ def _cluster_chart_html(chart):
 
 WHALE_LEGEND_SHARE = 0.005
 
+WHALE_LEGEND_PIXELS = 2.0
+
 
 def _whale_chart_html(chart):
     drawn = [
@@ -1558,12 +1560,16 @@ def _whale_chart_html(chart):
         }
         for row in chart["rows"]
     ]
-    totals = [sum(row["parts"][index] for row in chart["rows"]) for index in drawn]
+    totals = [sum(part["parts"][position] for part in categories) for position, _ in enumerate(drawn)]
     grand = sum(totals)
+    tallest = [
+        max(charts.column_heights(categories, position), default=0.0)
+        for position, _ in enumerate(drawn)
+    ]
     shown = [
         entry
-        for entry, total in zip(series, totals)
-        if not grand or total >= WHALE_LEGEND_SHARE * grand
+        for entry, total, peak in zip(series, totals, tallest)
+        if (not grand or total >= WHALE_LEGEND_SHARE * grand) and peak >= WHALE_LEGEND_PIXELS
     ]
     note = "One bar per turn."
     if len(shown) < len(series):
