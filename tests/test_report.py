@@ -1868,3 +1868,42 @@ def test_two_recommendations_clipping_alike_keep_their_differing_tails():
         "...Bash input",
         "...Read input",
     ]
+
+
+def _whale_bars(parts):
+    import evidence
+
+    return {
+        "kind": "whale_bars",
+        "rows": [
+            {
+                "label": "05:4%d" % index,
+                "turn": index + 1,
+                "model": "claude-opus-5",
+                "agent": "main agent",
+                "weighted": sum(row),
+                "parts": list(row),
+            }
+            for index, row in enumerate(parts)
+        ],
+        "series": list(evidence.WHALE_SERIES),
+    }
+
+
+def _swatches(html):
+    box = re.search(r'<div class="legend">.*?</div>\s*<div class="chart-wrap"', html, re.S)
+    return re.findall(r'class="swatch" style="background:var\((--[a-z0-9-]+)\)"', box.group(0) if box else "")
+
+
+def test_the_whale_legend_drops_a_class_that_is_all_but_invisible():
+    chart = _whale_bars([[0.0, 900_000.0, 1_000.0, 20.0], [0.0, 900_000.0, 1_000.0, 20.0]])
+    html = report._whale_chart_html(chart)
+    assert _swatches(html) == ["--series-1"]
+    assert "Smaller classes omitted." in html
+
+
+def test_the_whale_legend_keeps_every_class_that_is_readable():
+    chart = _whale_bars([[0.0, 600_000.0, 300_000.0, 100_000.0]])
+    html = report._whale_chart_html(chart)
+    assert _swatches(html) == ["--series-1", "--series-2", "--series-3"]
+    assert "Smaller classes omitted." not in html

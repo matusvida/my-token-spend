@@ -1535,6 +1535,9 @@ def _cluster_chart_html(chart):
     )
 
 
+WHALE_LEGEND_SHARE = 0.005
+
+
 def _whale_chart_html(chart):
     drawn = [
         index
@@ -1555,10 +1558,20 @@ def _whale_chart_html(chart):
         }
         for row in chart["rows"]
     ]
+    totals = [sum(row["parts"][index] for row in chart["rows"]) for index in drawn]
+    grand = sum(totals)
+    shown = [
+        entry
+        for entry, total in zip(series, totals)
+        if not grand or total >= WHALE_LEGEND_SHARE * grand
+    ]
+    note = "One bar per turn."
+    if len(shown) < len(series):
+        note += " Smaller classes omitted."
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
-        legend(series),
+        legend(shown),
         svg_stacked_columns(categories, series),
-        esc("One bar per turn."),
+        esc(note),
         table_view(
             ["when", "turn", "model", "agent", "weighted"],
             [
