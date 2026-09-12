@@ -268,3 +268,20 @@ def test_window_block_keeps_a_per_turn_series_for_the_chart():
 def test_window_block_skips_sessions_that_stay_under_the_threshold():
     records = [rec(at(i), cache_read=1000) for i in range(13)]
     assert context.window_block(records, CONFIG)["sessions"] == []
+
+
+def test_a_long_session_series_is_downsampled_for_the_chart():
+    session = [rec(at(0), cache_read=THRESHOLD + i) for i in range(context.SERIES_POINTS + 500)]
+    for i, record in enumerate(session):
+        record["ts"] = "2026-08-25T14:00:%06.3f+00:00" % (i * 0.001)
+    summary = growth_of(session)
+    assert len(summary["series"]) <= context.SERIES_POINTS + 1
+    assert summary["series"][-1][0] == session[-1]["ts"]
+
+
+def test_compaction_timestamps_are_kept_for_the_chart_markers():
+    session = [
+        rec(at(0), cache_read=10000),
+        rec(at(1), cache_read=20000, after_compaction=True),
+    ]
+    assert growth_of(session)["compaction_ts"] == [at(1)]

@@ -6,6 +6,7 @@ PROMPT = "prompt"
 UNATTRIBUTED = "unattributed"
 TOP_RESULTS = 10
 MAX_SESSIONS = 10
+SERIES_POINTS = 600
 
 
 def _usage(record):
@@ -92,6 +93,7 @@ def summarize_session(session, config):
             series.append([record["ts"], _usage(record), round(growth), leader])
 
     series.sort(key=lambda point: point[0])
+    series = _downsample(series, SERIES_POINTS)
     ordered = sorted(session, key=lambda r: r["ts"])
     excess_tokens = 0
     carry_tax = 0.0
@@ -118,6 +120,7 @@ def summarize_session(session, config):
         "attributed_share": (attributed_growth / total_growth) if total_growth else 0.0,
         "top_results": sorted(results, key=lambda entry: (-entry["chars"], entry["ts"]))[:TOP_RESULTS],
         "compactions": sum(1 for record in session if _is_reset(record)),
+        "compaction_ts": [record["ts"] for record in ordered if _is_reset(record)],
         "carry_tax": carry_tax,
         "excess_tokens": excess_tokens,
         "peak_cache_read": max((r["cache_read"] for r in session), default=0),
@@ -131,6 +134,16 @@ def summarize_session(session, config):
         },
         "series": series,
     }
+
+
+def _downsample(series, limit):
+    if len(series) <= limit:
+        return series
+    stride = len(series) / float(limit)
+    kept = [series[min(len(series) - 1, int(i * stride))] for i in range(limit)]
+    if kept[-1] is not series[-1]:
+        kept.append(series[-1])
+    return kept
 
 
 def _size(chars):

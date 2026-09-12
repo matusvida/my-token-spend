@@ -633,8 +633,10 @@ context          context.window_block output: the context-growth breakdown the
                    prompt_growth, unattributed_growth, attributed_share,
                    top_results[{tool, chars, ts, growth}], compactions,
                    carry_tax, excess_tokens, peak_cache_read, first_ts, last_ts,
-                   cwd, tool_results_coverage, series[[ts, context, growth,
-                   tool]]}]}
+                   cwd, tool_results_coverage, compaction_ts[],
+                   series[[ts, context, growth, tool]]}]}
+                 series is downsampled to 600 points; compaction_ts carries the
+                 markers so they survive the thinning
                  only sessions that carry a context_bloat finding, the ten
                  heaviest by carry tax
 
