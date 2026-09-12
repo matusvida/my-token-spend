@@ -1539,6 +1539,8 @@ def _round_trip_chart_html(chart):
         percent(100.0 * chart["coverage"]),
         exact(chart["calls"]),
     )
+    if chart["tools"] > len(chart["rows"]):
+        note += " Top %d of %d tools." % (len(chart["rows"]), chart["tools"])
     return '<div class="table-wrap">%s</div><p class="chart-note">%s</p>' % (
         table(["tool", "failed", "failed again", "denied", "weighted"], rows),
         esc(note),
@@ -1659,13 +1661,13 @@ def _round_trip_card(card):
     return (
         '<div class="finding" id="%s"><div class="finding-head"><span class="finding-rule">round trips</span>'
         '<span class="finding-subject">%s failed</span><span class="finding-cost">%s</span></div>'
-        '<div class="finding-detail">Tool calls that came back as an error, and the calls that failed again '
-        "on the same input.</div>"
+        '<div class="finding-detail">Tool calls that came back as an error, including the calls that failed '
+        "again on the same input.</div>"
         '<div class="finding-threshold">Counted at %s.</div>%s</div>'
         % (
             esc(card["id"]),
-            esc(exact(sum(row["failures"] for row in card["chart"]["rows"]))),
-            esc(compact(card["chart"]["detectors"][0]["weighted_cost"])),
+            esc(exact(card["chart"]["failures"])),
+            esc(compact(card["chart"]["weighted"])),
             esc(card["threshold"]),
             _round_trip_chart_html(card["chart"]),
         )

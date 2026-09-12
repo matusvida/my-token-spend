@@ -232,12 +232,23 @@ def _repeat_chart(records, findings):
     return {"kind": "repeat_table", "rows": rows, "hidden": max(0, len(findings) - len(rows))}
 
 
+def _detector_of(analysis, key):
+    for item in analysis["detectors"]:
+        if item["key"] == key:
+            return item
+    return {"count": 0, "weighted_cost": 0.0}
+
+
 def round_trip_chart(analysis):
     if not analysis.get("by_tool"):
         return None
+    failed = _detector_of(analysis, rules.FAILED_CALLS)
     return {
         "kind": "round_trip_table",
         "rows": analysis["by_tool"][:TABLE_ROWS],
+        "tools": len(analysis["by_tool"]),
+        "failures": failed["count"],
+        "weighted": failed["weighted_cost"],
         "detectors": analysis["detectors"],
         "coverage": analysis["result_coverage"],
         "calls": analysis["total_calls"],

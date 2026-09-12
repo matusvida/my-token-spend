@@ -134,3 +134,24 @@ def test_round_trips_break_the_failures_down_per_tool():
     assert rows["Read"]["denied"] == 1
     assert "Glob" not in rows
     assert [row["tool"] for row in analysis["by_tool"]] == ["Bash", "Read"]
+
+
+def test_the_round_trip_card_states_window_totals_not_the_visible_rows():
+    import evidence
+    import report
+
+    records = [
+        record("u%d" % index, tools=[tool("Tool%d" % index, "h%d" % index, is_error=True)], weighted=100.0)
+        for index in range(6)
+    ]
+    analysis = rules.round_trips(records)
+    chart = evidence.round_trip_chart(analysis)
+    assert len(chart["rows"]) == 4
+    assert chart["tools"] == 6
+    assert chart["failures"] == 6
+    assert sum(row["failures"] for row in chart["rows"]) == 4
+    card = {"id": "round_trips", "threshold": "any error", "chart": chart}
+    html = report._round_trip_card(card)
+    assert ">6 failed<" in html
+    assert "Top 4 of 6 tools." in html
+    assert "including the calls that failed again on the same input" in html
