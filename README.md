@@ -267,7 +267,12 @@ default lives there rather than in the code, so nothing needs a source edit:
 | `ceiling.override` | `null` | pin the weekly ceiling instead of inferring it |
 | `thresholds.*` | see file | when each rule fires |
 | `thresholds.model_mismatch.downgrade_model` | `claude-sonnet-5` | the cheaper model every saving is priced against |
+| `thresholds.model_mismatch.max_thinking` | `200` | a turn that thought longer than this is judgement, not a trivial lookup, and is not re-priced. A turn that dispatched an `Agent` is excluded outright |
+| `headroom.max_pct` | `60` | a closed window under this share of a **known** quota, with the window before it under it too, gets an under-spend finding. Never fires on the estimated ceiling |
+| `headroom.min_thinking`, `headroom.min_output` | `500`, `800` | median tokens per turn above which a component's runs are treated as judgement work worth a higher tier |
+| `headroom.min_serial_minutes` | `20` | total run time a session's never-overlapping subagent runs must reach before widening the fan-out is suggested |
 | `advice.sonnet_class_agents` | a review-agent list | agent types whose work is judged to survive the cheaper tier. **Replace this with your own agents** — an agent not listed is reported with its cost and no saving, never silently downgraded |
+| `advice.opus_class_agents` | empty | agent types judged to need the top tier. An agent here whose definition asks for a cheaper model is offered an upgrade, but only while a closed window left enough quota unused to pay for it. An agent on neither list gets no verdict either way |
 | `advice.min_saving`, `tune.min_saving`, `tune.min_cost` | `250000` | floors a proposal must clear |
 | `tune.windows`, `tune.min_windows_for_proposal` | `4`, `2` | how many closed windows are aggregated, and how many a component must appear in |
 | `tune.builtin_agents` | Claude Code's own agent types | names that get a setting-level proposal against `CLAUDE_CODE_SUBAGENT_MODEL` rather than "definition not found" |
