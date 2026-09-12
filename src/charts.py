@@ -6,6 +6,14 @@ def clip(text, limit):
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
+def clip_front(text, limit):
+    return text if len(text) <= limit else "..." + text[-(limit - 3) :].lstrip()
+
+
+def clip_label(text, limit, derived=False):
+    return clip_front(text, limit) if derived else clip(text, limit)
+
+
 def compact(value):
     value = float(value)
     sign = "-" if value < 0 else ""
@@ -59,6 +67,9 @@ MARGIN = {"left": 84, "right": 28, "top": 18, "bottom": 58}
 
 
 BAR_CAP = 24
+
+
+LABEL_CHARS = 46
 
 
 CORNER = 4
@@ -459,7 +470,7 @@ def svg_run_timeline(chart, label_width=300, row_height=26):
         length = max(3.0, (ends[index] - starts[index]) / span * track)
         parts.append(
             '<text class="row-label" x="%d" y="%.2f" text-anchor="end">%s</text>'
-            % (label_width - 12, y + thickness / 2 + 4, esc(clip(run["label"], 28)))
+            % (label_width - 12, y + thickness / 2 + 4, esc(clip_label(run["label"], LABEL_CHARS, not run["named"])))
         )
         parts.append(
             '<path class="mark" d="%s" fill="var(%s)" tabindex="0" data-tip="%s"/>'

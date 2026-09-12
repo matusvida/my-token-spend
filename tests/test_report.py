@@ -1326,3 +1326,16 @@ def test_a_cluster_list_states_how_many_runs_a_description_was_recovered_for():
     drill = html.split("<h2>What the big cost centres did</h2>")[1]
     assert "Rebase the pricing branch" in drill
     assert "descriptions recovered for 50% of runs" in drill
+
+
+def test_a_derived_label_is_truncated_from_the_front_so_the_tail_distinguishes_it():
+    import charts
+
+    long_label = "shell commands with file writes in product-promotion-service on cti-12375-fv-promo-job"
+    front = charts.clip_label(long_label, charts.LABEL_CHARS, derived=True)
+    assert front.startswith("...")
+    assert front.endswith("cti-12375-fv-promo-job")
+    assert len(front) == charts.LABEL_CHARS
+    named = charts.clip_label(long_label, charts.LABEL_CHARS, derived=False)
+    assert named.startswith("shell commands")
+    assert named.endswith("...")

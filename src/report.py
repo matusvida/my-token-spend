@@ -1466,7 +1466,7 @@ def _cluster_bar_rows(rows):
 def _cluster_chart_html(chart):
     rows = [
         {
-            "label": clip(row["label"], 28),
+            "label": charts.clip_label(row["label"], charts.LABEL_CHARS, row["derived"]),
             "value": row["weighted"],
             "color": charts.OTHER if row["confidence"] == "residual" or row["derived"] else "--series-1",
             "tip": "%s\n%s weighted\n%s, %s"
@@ -1684,7 +1684,7 @@ def _lane_block(lane, total):
     marks = legend(list(DERIVED_LEGEND)) if any(row.get("derived") for row in lane["rows"]) else ""
     rows = [
         {
-            "label": clip(row["label"], 38),
+            "label": charts.clip_label(row["label"], 38, row.get("derived")),
             "value": row["weighted"],
             "color": charts.OTHER if row.get("derived") else "--series-1",
             "tip": "%s\n%s weighted (%s of the window)"
