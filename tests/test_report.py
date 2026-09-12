@@ -364,7 +364,9 @@ def test_narrative_is_injected_when_present():
 
 def test_narrative_absence_is_stated_not_crashed():
     windows = [make_window()]
-    assert "No narrative was generated" in report.render_html(windows, windows[0], narrative=None)
+    page = report.render_html(windows, windows[0], narrative=None)
+    assert "Why this week looked like this" not in page
+    assert "No narrative: writing one needs the <code>claude</code> CLI on PATH." in page
 
 
 def test_build_narrative_prompt_is_small_and_warns_about_summing():
@@ -875,7 +877,6 @@ def test_a_legacy_page_without_a_narrative_reports_none(tmp_path):
     path = str(tmp_path / "page.html")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(report.render_html(windows, windows[0], narrative=None))
-    strip_narrative_attribute(path)
     assert report.read_stamp(path)["narrative"] is None
 
 
@@ -970,7 +971,7 @@ def test_the_page_reads_verdict_then_actions_then_findings_then_centres_then_raw
     order = [
         html.index('<section class="card verdict">'),
         html.index("<h2>Do these first</h2>"),
-        html.index("<h2>Why this week looked like this</h2>"),
+        html.index("No narrative: writing one needs the"),
         html.index("<h2>Findings</h2>"),
         html.index("<h2>Cost centres</h2>"),
         html.index("<h2>Raw breakdowns</h2>"),

@@ -1859,8 +1859,8 @@ def _narrative_section(narrative):
     narrative = _clip_words(narrative, NARRATIVE_WORDS) if narrative else narrative
     if not narrative:
         return (
-            '<section class="card narrative" data-narrative=""><h2>Why this week looked like this</h2>'
-            '<p class="sub">No narrative was generated for this run.</p></section>'
+            '<p class="sub narrative-missing" data-narrative="">No narrative: writing one needs the '
+            "<code>claude</code> CLI on PATH.</p>"
         )
     blocks = []
     bullets = []
