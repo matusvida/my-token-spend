@@ -1436,7 +1436,6 @@ def _marked_legend(entries):
 
 
 def _context_chart_html(chart):
-    names = [entry["tool"] for entry in chart["by_tool"][:5]]
     note = "x is turn order, not a clock; colour is the tool that grew it"
     if chart.get("compactions"):
         note += "; dashed = %s" % _plural(len(chart["compactions"]), "compaction")
@@ -1446,7 +1445,7 @@ def _context_chart_html(chart):
         for entry in chart["by_tool"]
     ]
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
-        _legend_of(names, {point[3] for point in chart["series"] if point[1] > 0}),
+        legend(charts.context_legend(chart)),
         svg_context_series(chart),
         esc(note),
         table_view(["tool", "context tokens it grew", "results"], rows, "Numbers"),

@@ -1772,3 +1772,40 @@ def test_the_mismatch_detail_collapses_a_degenerate_tool_call_range():
     detail = rules.model_mismatch(records, config)[0]["detail"]
     assert "exactly 1 tool call," in detail
     assert "tool call(s)" not in detail
+def _bloat_chart():
+    tools = ["Read", "Bash", "Grep", "Write", "Agent", "Edit", "Glob"]
+    series = [
+        ["2026-08-22T09:%02d:00+00:00" % index, 100000 + index, 10, leader]
+        for index, leader in enumerate(tools + [None, "unattributed"])
+    ]
+    return {
+        "kind": "context_series",
+        "series": series,
+        "threshold": 150000,
+        "compactions": [],
+        "by_tool": [{"tool": name, "tokens": 100 - index, "results": 1} for index, name in enumerate(tools)],
+        "top_results": [],
+    }
+
+
+def test_the_context_legend_names_every_colour_the_chart_draws():
+    import charts
+
+    chart = _bloat_chart()
+    drawn = set(re.findall(r'class="mark"[^>]*fill="var\((--[a-z0-9-]+)\)"', charts.svg_context_series(chart)))
+    html = report._context_chart_html(chart)
+    legended = set(re.findall(r'class="swatch" style="background:var\((--[a-z0-9-]+)\)"', html))
+    assert legended == drawn
+    assert charts.OTHER in drawn
+    assert "other or unattributed" in html
+
+
+def test_the_context_legend_leaves_out_a_tool_that_never_led_a_turn():
+    import charts
+
+    chart = _bloat_chart()
+    chart["series"] = [point for point in chart["series"] if point[3] != "Grep"]
+    html = report._context_chart_html(chart)
+    legended = set(re.findall(r'class="swatch" style="background:var\((--[a-z0-9-]+)\)"', html))
+    assert legended == set(re.findall(r'class="mark"[^>]*fill="var\((--[a-z0-9-]+)\)"', charts.svg_context_series(chart)))
+    assert "Grep" not in re.search(r'<div class="legend">.*?</div>', html, re.S).group(0)

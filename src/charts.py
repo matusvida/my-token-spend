@@ -451,12 +451,30 @@ def _svg(height, body):
     return '<svg viewBox="0 0 %d %d" class="chart" role="img">%s</svg>' % (PLOT_WIDTH, height, body)
 
 
+CONTEXT_CLASSES = 5
+
+OTHER_CONTEXT = "other or unattributed"
+
+
+def _context_colors(chart):
+    return color_map([entry["tool"] for entry in chart["by_tool"][:CONTEXT_CLASSES]])
+
+
+def context_legend(chart):
+    colors = _context_colors(chart)
+    drawn = {point[3] for point in chart["series"] if point[1] > 0}
+    entries = [{"name": name, "color": colors[name]} for name in colors if name in drawn]
+    if any(name not in colors for name in drawn):
+        entries.append({"name": OTHER_CONTEXT, "color": OTHER})
+    return entries
+
+
 def svg_context_series(chart, height=280):
     left, top, width, plot_height = _plot_box(height)
     series = chart["series"]
     if not series:
         return ""
-    colors = color_map([entry["tool"] for entry in chart["by_tool"][:8]])
+    colors = _context_colors(chart)
     threshold = chart.get("threshold") or 0
     ticks = nice_ticks(max([point[1] for point in series] + [threshold]))
     top_tick = ticks[-1]
