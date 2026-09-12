@@ -211,17 +211,59 @@ def _prompt_text(entry, limit):
     return text[:limit] if text else None
 
 
+DENIED_MARKERS = ("want to proceed with this tool use", "tool use was rejected")
+
+
+def _result_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text") or ""
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return ""
+
+
+def _tool_outcome(block):
+    text = _result_text(block.get("content"))
+    is_error = bool(block.get("is_error"))
+    return {
+        "result_chars": len(text),
+        "is_error": is_error,
+        "denied": is_error and any(marker in text for marker in DENIED_MARKERS),
+    }
+
+
+def _tool_results(entry):
+    content = (entry.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id"):
+            yield block["tool_use_id"], _tool_outcome(block)
+
+
 def read_file(path, config, stored):
     stat = path.stat()
     size, mtime = stat.st_size, stat.st_mtime
 
     if stored and size == stored["size"] and mtime == stored["mtime"]:
-        return {"records": [], "state": dict(stored), "malformed": 0, "reset_candidates": []}
+        return {
+            "records": [],
+            "state": dict(stored),
+            "malformed": 0,
+            "reset_candidates": [],
+            "pending_results": {},
+        }
 
     resume = bool(stored) and size > stored["size"]
     offset = stored["offset"] if resume else 0
     last_prompt = stored.get("last_prompt") if resume else None
     carried_malformed = stored.get("malformed", 0) if resume else 0
+    source_tool_use_id = stored.get("source_tool_use_id") if resume else None
+    after_compaction = bool(stored.get("pending_compaction")) if resume else False
 
     with path.open("rb") as handle:
         handle.seek(offset)
@@ -237,6 +279,8 @@ def read_file(path, config, stored):
     records = []
     malformed = 0
     reset_candidates = set()
+    awaiting = {}
+    pending_results = {}
     limit = config["prompt_label_chars"]
     for chunk in chunks:
         consumed += len(chunk) + 1
@@ -258,11 +302,30 @@ def read_file(path, config, stored):
             prompt = _prompt_text(entry, limit)
             if prompt:
                 last_prompt = prompt
+            if source_tool_use_id is None and entry.get("sourceToolUseID"):
+                source_tool_use_id = entry["sourceToolUseID"]
+            if entry.get("isCompactSummary"):
+                after_compaction = True
+            for call_id, outcome in _tool_results(entry):
+                tool = awaiting.pop(call_id, None)
+                if tool is None:
+                    pending_results[call_id] = outcome
+                else:
+                    tool.update(outcome)
             continue
         record = normalize(entry, config)
         if record is not None:
             record["prompt"] = last_prompt
+            record["after_compaction"] = after_compaction
+            after_compaction = False
+            for tool in record["tools"]:
+                tool.update({"result_chars": None, "is_error": None, "denied": None})
+                if tool["tool_use_id"]:
+                    awaiting[tool["tool_use_id"]] = tool
             records.append(record)
+
+    for record in records:
+        record["source_tool_use_id"] = source_tool_use_id
 
     return {
         "records": records,
@@ -272,9 +335,12 @@ def read_file(path, config, stored):
             "mtime": mtime,
             "last_prompt": last_prompt,
             "malformed": carried_malformed + malformed,
+            "source_tool_use_id": source_tool_use_id,
+            "pending_compaction": after_compaction,
         },
         "malformed": malformed,
         "reset_candidates": sorted(reset_candidates),
+        "pending_results": pending_results,
     }
 
 
@@ -747,6 +813,19 @@ def reprice(config, out_dir, state_path):
     }
 
 
+def _fill_tool_results(stores, pending_results):
+    if not pending_results:
+        return
+    for bucket in stores.values():
+        for record in bucket.values():
+            for tool in record.get("tools") or []:
+                if tool.get("result_chars") is not None:
+                    continue
+                outcome = pending_results.get(tool.get("tool_use_id"))
+                if outcome:
+                    tool.update(outcome)
+
+
 def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_from_transcripts_only=False):
     root, out_dir, state_path = Path(root), Path(out_dir), Path(state_path)
     data_dir, reports_dir, store_dir = _prepare_dirs(out_dir)
@@ -758,12 +837,14 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
 
     files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
     fresh = []
+    pending_results = {}
     for path in files:
         key = str(path.resolve())
         result = read_file(path, config, state["files"].get(key))
         state["files"][key] = result["state"]
         fresh.extend(result["records"])
         reset_candidates |= set(result["reset_candidates"])
+        pending_results.update(result["pending_results"])
 
     detected = resolve_reset_weekday(reset_candidates)
     state["reset"] = {
@@ -780,6 +861,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     for record in fresh:
         start = window_start(parse_ts(record["ts"]), config).isoformat()
         stores.setdefault(start, {})[_record_key(record)] = record
+    _fill_tool_results(stores, pending_results)
 
     if not any(stores.values()):
         raise CollectionError(

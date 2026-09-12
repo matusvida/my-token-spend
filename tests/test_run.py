@@ -178,3 +178,58 @@ def test_subdirectories_of_the_transcript_root_are_walked(workspace):
     run(workspace)
     window = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
     assert window["totals"]["turns"] == 1
+
+
+def _tool_turn(uuid, ts, call_id):
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "timestamp": ts,
+            "sessionId": "s1",
+            "isSidechain": False,
+            "cwd": "C:\workspace\srst",
+            "message": {
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": call_id, "name": "Bash", "input": {"c": call_id}}],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 10,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+            },
+        }
+    )
+
+
+def _result(call_id, text, is_error=True):
+    return json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": call_id, "content": text, "is_error": is_error}
+                ]
+            },
+        }
+    )
+
+
+def stored_tools(workspace, key="week_2026_08_22"):
+    path = workspace["out"] / "data" / "records" / (key + ".jsonl")
+    return [json.loads(line)["tools"] for line in path.read_text().splitlines() if line.strip()]
+
+
+def test_a_result_that_arrives_in_a_later_pass_is_filled_into_the_stored_turn(workspace):
+    transcript = workspace["proj"] / "a.jsonl"
+    transcript.write_text(_tool_turn("u1", "2026-08-25T10:00:00Z", "c1") + "\n", encoding="utf-8")
+    run(workspace)
+    assert stored_tools(workspace)[0][0]["result_chars"] is None
+
+    transcript.write_text(
+        _tool_turn("u1", "2026-08-25T10:00:00Z", "c1") + "\n" + _result("c1", "boom") + "\n", encoding="utf-8"
+    )
+    run(workspace)
+    tool = stored_tools(workspace)[0][0]
+    assert (tool["result_chars"], tool["is_error"], tool["denied"]) == (4, True, False)

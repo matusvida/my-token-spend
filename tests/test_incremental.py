@@ -139,3 +139,123 @@ def test_tool_result_user_turns_do_not_overwrite_the_prompt(tmp_path):
     write(f, [user_line("real prompt"), tool_result, assistant_line("u1")])
     result = collect.read_file(f, CONFIG, None)
     assert result["records"][0]["prompt"] == "real prompt"
+
+
+def tool_line(uuid, calls, ts="2026-08-25T10:00:00Z"):
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "timestamp": ts,
+            "sessionId": "s1",
+            "isSidechain": False,
+            "message": {
+                "model": "claude-sonnet-5",
+                "content": [
+                    {"type": "tool_use", "id": call_id, "name": name, "input": {"n": call_id}}
+                    for call_id, name in calls
+                ],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+            },
+        }
+    )
+
+
+def result_line(call_id, content, is_error=False):
+    return json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": call_id, "content": content, "is_error": is_error}
+                ]
+            },
+        }
+    )
+
+
+def test_a_tool_result_is_joined_onto_the_call_that_issued_it(tmp_path):
+    f = tmp_path / "a.jsonl"
+    write(f, [tool_line("u1", [("c1", "Bash"), ("c2", "Read")]), result_line("c1", "boom", True), result_line("c2", "ok")])
+    tools = collect.read_file(f, CONFIG, None)["records"][0]["tools"]
+    assert (tools[0]["result_chars"], tools[0]["is_error"], tools[0]["denied"]) == (4, True, False)
+    assert (tools[1]["result_chars"], tools[1]["is_error"], tools[1]["denied"]) == (2, False, False)
+
+
+def test_a_permission_denial_is_flagged_as_denied(tmp_path):
+    f = tmp_path / "a.jsonl"
+    denial = "The user doesn't want to proceed with this tool use. The tool use was rejected"
+    write(f, [tool_line("u1", [("c1", "Edit")]), result_line("c1", denial, True)])
+    tool = collect.read_file(f, CONFIG, None)["records"][0]["tools"][0]
+    assert tool["denied"] is True and tool["is_error"] is True
+
+
+def test_result_chars_count_only_the_text_of_a_block_list(tmp_path):
+    f = tmp_path / "a.jsonl"
+    blocks = [{"type": "text", "text": "abcde"}, {"type": "image", "source": {"data": "x" * 500}}]
+    write(f, [tool_line("u1", [("c1", "Read")]), result_line("c1", blocks)])
+    assert collect.read_file(f, CONFIG, None)["records"][0]["tools"][0]["result_chars"] == 5
+
+
+def test_a_call_whose_result_has_not_arrived_yet_carries_no_outcome(tmp_path):
+    f = tmp_path / "a.jsonl"
+    write(f, [tool_line("u1", [("c1", "Bash")])])
+    first = collect.read_file(f, CONFIG, None)
+    tool = first["records"][0]["tools"][0]
+    assert (tool["result_chars"], tool["is_error"], tool["denied"]) == (None, None, None)
+    assert first["pending_results"] == {}
+
+
+def test_a_result_arriving_after_its_turn_was_stored_is_handed_back_for_patching(tmp_path):
+    f = tmp_path / "a.jsonl"
+    write(f, [tool_line("u1", [("c1", "Bash")])])
+    first = collect.read_file(f, CONFIG, None)
+    write(f, [tool_line("u1", [("c1", "Bash")]), result_line("c1", "boom", True)])
+    second = collect.read_file(f, CONFIG, first["state"])
+    assert second["records"] == []
+    assert second["pending_results"]["c1"] == {"result_chars": 4, "is_error": True, "denied": False}
+
+
+def test_the_turn_after_a_compact_summary_is_flagged(tmp_path):
+    f = tmp_path / "a.jsonl"
+    compact = json.dumps({"type": "user", "isCompactSummary": True, "message": {"content": "summary"}})
+    write(f, [assistant_line("u1"), compact, assistant_line("u2"), assistant_line("u3")])
+    flags = [r["after_compaction"] for r in collect.read_file(f, CONFIG, None)["records"]]
+    assert flags == [False, True, False]
+
+
+def test_a_compact_summary_at_the_tail_flags_the_next_pass(tmp_path):
+    f = tmp_path / "a.jsonl"
+    compact = json.dumps({"type": "user", "isCompactSummary": True, "message": {"content": "summary"}})
+    write(f, [assistant_line("u1"), compact])
+    first = collect.read_file(f, CONFIG, None)
+    write(f, [assistant_line("u1"), compact, assistant_line("u2")])
+    assert collect.read_file(f, CONFIG, first["state"])["records"][0]["after_compaction"] is True
+
+
+def test_every_turn_of_a_subagent_file_carries_the_call_that_spawned_it(tmp_path):
+    f = tmp_path / "agent-1.jsonl"
+    source = json.dumps({"type": "user", "sourceToolUseID": "toolu_9", "message": {"content": "go"}})
+    write(f, [assistant_line("u1"), source, assistant_line("u2")])
+    assert [r["source_tool_use_id"] for r in collect.read_file(f, CONFIG, None)["records"]] == ["toolu_9", "toolu_9"]
+
+
+def test_the_spawning_call_survives_an_incremental_resume(tmp_path):
+    f = tmp_path / "agent-1.jsonl"
+    source = json.dumps({"type": "user", "sourceToolUseID": "toolu_9", "message": {"content": "go"}})
+    write(f, [source, assistant_line("u1")])
+    first = collect.read_file(f, CONFIG, None)
+    write(f, [source, assistant_line("u1"), assistant_line("u2")])
+    second = collect.read_file(f, CONFIG, first["state"])
+    assert second["records"][0]["source_tool_use_id"] == "toolu_9"
+
+
+def test_a_main_session_turn_has_no_spawning_call(tmp_path):
+    f = tmp_path / "a.jsonl"
+    write(f, [assistant_line("u1")])
+    assert collect.read_file(f, CONFIG, None)["records"][0]["source_tool_use_id"] is None
