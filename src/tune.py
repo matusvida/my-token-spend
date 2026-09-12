@@ -1,16 +1,17 @@
-import difflib
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import advice
+import agentfiles
 import collect
 import paths
 import rules
 
 PROPOSAL = "proposal"
 SETTING_PROPOSAL = "setting_proposal"
+UPGRADE_PROPOSAL = "upgrade_proposal"
 ALREADY_RIGHT_SIZED = "already_right_sized"
 NO_FILE = "no_file"
 AMBIGUOUS = "ambiguous"
@@ -52,86 +53,10 @@ def settings(config):
 _model_family = advice.model_family
 
 
-def read_frontmatter(text):
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}, None, None
-    for index in range(1, len(lines)):
-        if lines[index].strip() == "---":
-            fields = {}
-            for line in lines[1:index]:
-                if ":" in line and not line.startswith((" ", "\t", "#")):
-                    key, _, value = line.partition(":")
-                    fields[key.strip()] = value.strip().strip('"').strip("'")
-            return fields, 1, index
-    return {}, None, None
 
 
-def _read(path):
-    try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return ""
 
 
-def _declared_name(path):
-    return read_frontmatter(_read(path))[0].get("name") or path.stem
-
-
-def installed_plugin_roots(plugins_home):
-    manifest = plugins_home / "installed_plugins.json"
-    if not manifest.is_file():
-        return []
-    try:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    roots = []
-    for identifier, installs in sorted((payload.get("plugins") or {}).items()):
-        plugin_name = identifier.split("@", 1)[0]
-        for install in installs or []:
-            install_path = install.get("installPath")
-            if not install_path:
-                continue
-            roots.append({"scope": "plugin", "plugin": plugin_name, "path": Path(install_path), "fallback": False})
-    return roots
-
-
-def marketplace_roots(plugins_home):
-    known = plugins_home / "known_marketplaces.json"
-    if not known.is_file():
-        return []
-    try:
-        names = sorted(json.loads(known.read_text(encoding="utf-8")))
-    except (OSError, ValueError):
-        return []
-    roots = []
-    for name in names:
-        market = plugins_home / "marketplaces" / name
-        if not market.is_dir():
-            continue
-        for tree in sorted(market.glob("plugins*")):
-            if not tree.is_dir():
-                continue
-            for plugin_dir in sorted(p for p in tree.iterdir() if p.is_dir()):
-                roots.append(
-                    {"scope": "marketplace", "plugin": plugin_dir.name, "path": plugin_dir, "fallback": True}
-                )
-    return roots
-
-
-def default_roots(user_home=None, project_dirs=(), plugins_home=None):
-    user_home = Path(user_home) if user_home else Path.home()
-    plugins_home = Path(plugins_home) if plugins_home else user_home / ".claude" / "plugins"
-    roots = []
-    for project in project_dirs:
-        if not project:
-            continue
-        roots.append({"scope": "project", "plugin": None, "path": Path(project) / ".claude", "fallback": False})
-    roots.append({"scope": "user", "plugin": None, "path": user_home / ".claude", "fallback": False})
-    roots.extend(installed_plugin_roots(plugins_home))
-    roots.extend(marketplace_roots(plugins_home))
-    return roots
 
 
 def subagent_model_setting(user_home=None):
@@ -151,124 +76,8 @@ def subagent_model_setting(user_home=None):
     return setting
 
 
-AGENT_DIRS = ("agents",)
-SKILL_DIRS = ("skills", "commands")
 
 
-def _candidate_files(root, kinds):
-    found = []
-    for kind in kinds:
-        directory = root["path"] / kind
-        if not directory.is_dir():
-            continue
-        try:
-            found.extend(path for path in directory.rglob("*.md") if path.is_file())
-        except OSError:
-            continue
-    return sorted(found)
-
-
-def _dedupe(paths):
-    seen = {}
-    for path in paths:
-        try:
-            key = path.resolve()
-        except OSError:
-            key = path
-        seen.setdefault(key, path)
-    return list(seen.values())
-
-
-def _split_qualified(name):
-    if ":" in name:
-        prefix, _, leaf = name.partition(":")
-        return prefix, leaf
-    return None, name
-
-
-def _search(roots, kinds, matcher, plugin_prefix):
-    primary = []
-    fallback = []
-    for root in roots:
-        if plugin_prefix and root["plugin"] != plugin_prefix:
-            continue
-        matches = [path for path in _candidate_files(root, kinds) if matcher(path)]
-        own = root["fallback"] or (not plugin_prefix and root["plugin"] is not None)
-        (fallback if own else primary).extend(matches)
-    return _dedupe(primary) or _dedupe(fallback)
-
-
-def resolve_agent(name, roots):
-    prefix, leaf = _split_qualified(name)
-
-    def matcher(path):
-        return path.stem == leaf or _declared_name(path) == leaf
-
-    return _search(roots, AGENT_DIRS, matcher, prefix)
-
-
-def resolve_skill(name, roots):
-    prefix, leaf = _split_qualified(name)
-
-    def matcher(path):
-        if path.name == "SKILL.md":
-            return path.parent.name == leaf or _declared_name(path) == leaf
-        return path.stem == leaf and path.parent.name in SKILL_DIRS
-
-    return _search(roots, SKILL_DIRS, matcher, prefix)
-
-
-def display_path(path, roots):
-    for root in roots:
-        try:
-            return (root["path"].name + "/" + path.relative_to(root["path"]).as_posix()).lstrip("/")
-        except ValueError:
-            continue
-    return path.name
-
-
-def purpose(text, limit=110):
-    cleaned = " ".join((text or "").split())
-    for lead in ("Use this agent for ", "Use this agent when ", "Use when ", "CLI tool for ", "CLI for "):
-        if cleaned.startswith(lead):
-            cleaned = cleaned[len(lead):]
-            break
-    if not cleaned:
-        return ""
-    head = cleaned.split(". ")[0].rstrip(".")
-    for separator in (": ", " - ", "; "):
-        if separator in head:
-            head = head.split(separator)[0]
-    if len(head) <= limit:
-        return head
-    return head[:limit].rsplit(" ", 1)[0] + "..."
-
-
-def propose_model_line(text, target):
-    fields, start, end = read_frontmatter(text)
-    lines = text.splitlines(keepends=True)
-    if start is None:
-        return None
-    updated = list(lines)
-    if "model" in fields:
-        for index in range(start, end):
-            if lines[index].split(":", 1)[0].strip() == "model":
-                updated[index] = "model: %s\n" % target
-                break
-    else:
-        updated.insert(end, "model: %s\n" % target)
-    return updated
-
-
-def unified_patch(path, text, target, label):
-    updated = propose_model_line(text, target)
-    if updated is None:
-        return None
-    return "".join(
-        difflib.unified_diff(
-            text.splitlines(keepends=True), updated, fromfile="a/" + label, tofile="b/" + label, n=1
-        )
-    )
 
 
 def median(values):
@@ -373,9 +182,7 @@ def _trivial_by_agent(records, config, pricing):
     totals = defaultdict(lambda: {"weighted": 0.0, "turns": 0})
     for record in records:
         agent = record.get("attributionAgent")
-        if not agent or record["output"] > thresholds["max_output_tokens"]:
-            continue
-        if not 1 <= len(record["tools"]) <= thresholds["max_tool_calls"]:
+        if not agent or not rules.trivial_turn(record, thresholds):
             continue
         weight = rules.model_weight(record["model"], pricing)[0]
         if weight <= downgrade_weight:
@@ -402,7 +209,7 @@ def collect_centres(windows, records_by_window, settings_map, config):
                     {
                         "component": component,
                         "name": bucket["key"],
-                        "plugin": _split_qualified(bucket["key"])[0],
+                        "plugin": agentfiles._split_qualified(bucket["key"])[0],
                         "per_window": {},
                         "turns": 0,
                         "total_weighted": 0.0,
@@ -614,6 +421,7 @@ def _entry(centre, status, **extra):
         "setting_readable": None,
         "trivial_weighted": centre.get("typical_trivial_weighted"),
         "trivial_turns": centre.get("trivial_turns"),
+        "weighted_cost_increase": None,
     }
     entry.update(extra)
     return entry
@@ -638,6 +446,21 @@ def _builtin_entry(centre, window_data, config, settings_map, setting, buys):
         "the `model` argument on the Agent call that starts each run."
         % (SUBAGENT_MODEL_ENV, setting["path"], current)
     )
+    if centre["name"] not in set(advice._settings(config)["sonnet_class_agents"]):
+        return _entry(
+            centre,
+            NOT_ASSESSABLE,
+            buys=buys,
+            note="%s It is not listed in advice.sonnet_class_agents in config.json, so whether its work "
+            "survives a cheaper tier has not been judged, and the widest lever this tool can name is not "
+            "proposed for it. Cost shown without a saving on purpose." % lever,
+            performance_risk="unknown",
+            quality_risk="Cannot be assessed from spend data alone.",
+            setting_env=SUBAGENT_MODEL_ENV,
+            setting_path=setting["path"],
+            setting_value=setting["value"],
+            setting_readable=setting["readable"],
+        )
     if saving < settings_map["min_saving"] or centre["windows_present"] < settings_map["min_windows_for_proposal"]:
         return _entry(
             centre,
@@ -672,9 +495,66 @@ def _builtin_entry(centre, window_data, config, settings_map, setting, buys):
     )
 
 
-def _agent_entry(centre, roots, window_data, config, settings_map, windows, setting):
+def _upgrade_entry(
+    centre, path, text, roots, declared, description, window_data, config, settings_map, headroom
+):
+    pricing = window_data.get("weights", config)
+    families = rules.family_weights(pricing)
+    current = families.get(_model_family(declared))
+    target = families.get(advice.UPGRADE_FAMILY)
+    cost = (
+        centre["typical_weighted"] * (target / current - 1.0)
+        if current and target and target > current
+        else None
+    )
+    thin = centre["windows_present"] < settings_map["min_windows_for_proposal"]
+    if cost is None or cost <= 0 or cost > headroom or thin:
+        if thin:
+            reason = "it ran in %d of %d analysed windows, below the %d-window floor for a config change" % (
+                centre["windows_present"],
+                centre["windows_analysed"],
+                settings_map["min_windows_for_proposal"],
+            )
+        elif cost is None:
+            reason = "this data cannot price the move"
+        elif cost <= 0:
+            reason = "its typical window cost is nothing, so there is nothing to price"
+        else:
+            reason = "the move would cost about %s weighted tokens per window against the %s the analysed windows left unused" % (
+                _num(cost),
+                _num(headroom),
+            )
+        return _entry(
+            centre,
+            ALREADY_RIGHT_SIZED,
+            files=[str(path)],
+            buys=description,
+            note="the definition asks for `model: %s` and no upgrade is proposed: %s."
+            % (declared, reason),
+            performance_risk="none",
+            quality_risk="No change proposed, so no quality risk.",
+        )
+    return _entry(
+        centre,
+        UPGRADE_PROPOSAL,
+        files=[str(path)],
+        buys=description,
+        weighted_cost_increase=cost,
+        performance_risk="none",
+        confidence="low",
+        note="set `model: %s` in the frontmatter. This SPENDS quota rather than saving it: about %s weighted tokens more per window, against the %s the analysed windows left unused."
+        % (advice.UPGRADE_FAMILY, _num(cost), _num(headroom)),
+        quality_risk="whether a higher tier reaches better answers on: %s - is NOT measurable from this data. The case for it is that the work looks like judgement, not that it was measured."
+        % (description or "this agent's work"),
+        patch=agentfiles.unified_patch(
+            path, text, advice.UPGRADE_FAMILY, agentfiles.display_path(path, roots)
+        ),
+    )
+
+
+def _agent_entry(centre, roots, window_data, config, settings_map, windows, setting, headroom=0.0):
     name = centre["name"]
-    matches = resolve_agent(name, roots)
+    matches = agentfiles.resolve_agent(name, roots)
     sessions = _storm_sessions(windows, name)
     buys = (
         "%d subagent turns, and %d session(s) in these windows ran it as a storm" % (centre["turns"], sessions)
@@ -708,14 +588,43 @@ def _agent_entry(centre, roots, window_data, config, settings_map, windows, sett
         )
 
     path = matches[0]
-    text = _read(path)
-    fields, _, _ = read_frontmatter(text)
+    text = agentfiles._read(path)
+    fields, _, _ = agentfiles.read_frontmatter(text)
     declared = fields.get("model")
-    description = purpose(fields.get("description"))
+    description = agentfiles.purpose(fields.get("description"))
     target = config["thresholds"]["model_mismatch"]["downgrade_model"]
     files = [str(path)]
 
+    advice_settings = advice._settings(config)
+    sonnet_class = set(advice_settings["sonnet_class_agents"])
+    opus_class = set(advice_settings["opus_class_agents"])
+    if name not in sonnet_class and name not in opus_class:
+        return _entry(
+            centre,
+            NOT_ASSESSABLE,
+            files=files,
+            buys=description or buys,
+            note="listed in neither advice.sonnet_class_agents nor advice.opus_class_agents in "
+            "config.json, so which tier its work needs has not been judged. Cost shown without a saving "
+            "on purpose.",
+            performance_risk="unknown",
+            quality_risk="Cannot be assessed from spend data alone.",
+        )
+
     if declared and _model_family(declared) in set(settings_map["cheap_model_families"]):
+        if name in opus_class and headroom > 0:
+            return _upgrade_entry(
+                centre,
+                path,
+                text,
+                roots,
+                declared,
+                description or buys,
+                window_data,
+                config,
+                settings_map,
+                headroom,
+            )
         return _entry(
             centre,
             ALREADY_RIGHT_SIZED,
@@ -727,16 +636,14 @@ def _agent_entry(centre, roots, window_data, config, settings_map, windows, sett
             quality_risk="No change proposed, so no quality risk.",
         )
 
-    sonnet_class = set(advice._settings(config)["sonnet_class_agents"])
     if name not in sonnet_class:
         return _entry(
             centre,
             NOT_ASSESSABLE,
             files=files,
             buys=description or buys,
-            note="not listed in advice.sonnet_class_agents in config.json, so whether its work survives a "
-            "cheaper tier "
-            "has not been judged. Cost shown without a saving on purpose.",
+            note="listed in advice.opus_class_agents but not in advice.sonnet_class_agents, and its "
+            "definition does not ask for a cheaper tier, so there is nothing to propose either way.",
             performance_risk="unknown",
             quality_risk="Cannot be assessed from spend data alone.",
         )
@@ -794,13 +701,13 @@ def _agent_entry(centre, roots, window_data, config, settings_map, windows, sett
         % (_model_family(declared) if declared else "the inherited model", description or "this agent's work"),
         note="set `model: %s` in the frontmatter. Same fan-out, cheaper workers."
         % _model_family(target),
-        patch=unified_patch(path, text, _model_family(target), display_path(path, roots)),
+        patch=agentfiles.unified_patch(path, text, _model_family(target), agentfiles.display_path(path, roots)),
     )
 
 
 def _skill_entry(centre, roots):
     name = centre["name"]
-    matches = resolve_skill(name, roots)
+    matches = agentfiles.resolve_skill(name, roots)
     if not matches:
         return _entry(
             centre,
@@ -810,33 +717,35 @@ def _skill_entry(centre, roots):
             quality_risk="Not assessed: no file to read.",
         )
     status = AMBIGUOUS if len(matches) > 1 else NOT_ASSESSABLE
-    fields = read_frontmatter(_read(matches[0]))[0]
+    fields = agentfiles.read_frontmatter(agentfiles._read(matches[0]))[0]
     description = fields.get("description") or ""
-    body = len(_read(matches[0]))
+    body = len(agentfiles._read(matches[0]))
     if len(matches) > 1:
         note = "the name resolves to %d files; which one ran is not recorded." % len(matches)
     else:
         note = (
             "cost is the turns attributed to this skill, not the cost of loading it. Its file is %s bytes "
-            "and its description is %d characters.%s"
-            % (
-                "{:,}".format(body),
-                len(description),
-                " That description is broad enough to pull the file in on turns that did not need it, "
-                "which this data cannot measure - read it and judge." if len(description) > 200 else "",
-            )
+            "and its description is %d characters." % ("{:,}".format(body), len(description))
         )
     return _entry(
         centre,
         status,
         files=[str(p) for p in matches],
-        buys=purpose(description),
+        buys=agentfiles.purpose(description),
         note=note,
         performance_risk="unknown",
         quality_risk="Cannot be assessed from spend data alone.",
         description_chars=len(description),
         file_bytes=body,
     )
+
+
+def unused_quota(windows):
+    for data in reversed(windows):
+        bucket = (data.get("findings_by_rule") or {}).get("headroom")
+        if bucket and bucket.get("weighted_cost"):
+            return float(bucket["weighted_cost"])
+    return 0.0
 
 
 def _rule_totals(windows, rule):
@@ -888,11 +797,16 @@ def _reconciliation(windows, current, entries, proposals, setting_proposals, con
             % (len(windows), _short(analysed["typical_weighted"]))
         )
     reasons.append(
-        "formula: the rule re-prices individual turns that produced under %d output tokens with at most %d "
-        "tool call. A proposal here prices a whole component instead - its typical window cost x the share "
-        "of the window that ran above %s x the price gap - and only where a file or a setting can carry "
-        "the change."
-        % (thresholds["max_output_tokens"], thresholds["max_tool_calls"], thresholds["downgrade_model"])
+        "formula: the rule re-prices individual turns that produced at most %d output tokens with between 1 "
+        "and %d tool call(s), at most %d thinking tokens and no Agent dispatch among them. A proposal here "
+        "prices a whole component instead - its typical window cost x the share of the window that ran "
+        "above %s x the price gap - and only where a file or a setting can carry the change."
+        % (
+            thresholds["max_output_tokens"],
+            thresholds["max_tool_calls"],
+            thresholds.get("max_thinking", rules.MAX_THINKING_DEFAULT),
+            thresholds["downgrade_model"],
+        )
     )
     if unpatchable:
         reasons.append(
@@ -934,16 +848,19 @@ def build(
     now = now or datetime.now(timezone.utc)
     open_window = open_window if open_window is not None else current
     records_by_window = records_by_window or {}
-    roots = roots if roots is not None else default_roots(project_dirs=project_dirs(windows))
+    roots = roots if roots is not None else agentfiles.default_roots(project_dirs=project_dirs(windows))
     setting = setting if setting is not None else subagent_model_setting()
     latest = windows[-1]
     ceiling = (latest.get("ceiling") or {}).get("estimate")
 
+    headroom = unused_quota(windows)
     centres = collect_centres(windows, records_by_window, settings_map, config)
     entries = []
     for centre in centres:
         if centre["component"] == "agent":
-            entries.append(_agent_entry(centre, roots, latest, config, settings_map, windows, setting))
+            entries.append(
+                _agent_entry(centre, roots, latest, config, settings_map, windows, setting, headroom)
+            )
         else:
             entries.append(_skill_entry(centre, roots))
 
@@ -954,7 +871,11 @@ def build(
         (e for e in entries if e["status"] == SETTING_PROPOSAL),
         key=lambda e: (-e["weighted_saving"], e["name"]),
     )
-    proposed = (PROPOSAL, SETTING_PROPOSAL)
+    upgrade_proposals = sorted(
+        (e for e in entries if e["status"] == UPGRADE_PROPOSAL),
+        key=lambda e: (-e["weighted_cost_increase"], e["name"]),
+    )
+    proposed = (PROPOSAL, SETTING_PROPOSAL, UPGRADE_PROPOSAL)
     reported = sorted(
         (
             e
@@ -1024,6 +945,8 @@ def build(
         "single_window": len(windows) == 1,
         "proposals": proposals,
         "setting_proposals": setting_proposals,
+        "upgrade_proposals": upgrade_proposals,
+        "unused_quota": headroom,
         "subagent_model_setting": setting,
         "reconciliation": _reconciliation(
             windows, current, entries, proposals, setting_proposals, config, open_window=open_window, now=now
@@ -1068,6 +991,7 @@ STATUS_LABEL = {
     ALREADY_RIGHT_SIZED: "already right-sized",
     NO_FILE: "no file to edit",
     AMBIGUOUS: "ambiguous",
+    UPGRADE_PROPOSAL: "UPGRADE PROPOSAL",
     NOT_ASSESSABLE: "no proposal",
     OBSERVATION: "below the saving floor",
     ONE_OFF: "one-off, not a pattern",
@@ -1318,7 +1242,13 @@ def _render_entry(entry, indent="  "):
     )
     if entry["buys"]:
         lines.append("%sWhat it buys: %s" % (indent, entry["buys"]))
-    if entry["status"] in (PROPOSAL, SETTING_PROPOSAL):
+    if entry["status"] == UPGRADE_PROPOSAL:
+        lines.append("%sUpgrade proposal: %s" % (indent, entry["note"]))
+        lines.append(
+            "%sEst. extra cost %s per window     Quality risk (%s): %s"
+            % (indent, _short(entry["weighted_cost_increase"]), entry["performance_risk"], entry["quality_risk"])
+        )
+    elif entry["status"] in (PROPOSAL, SETTING_PROPOSAL):
         lines.append("%sProposal: %s" % (indent, entry["note"]))
         lines.append(
             "%sEst. saving %s per window     Quality risk (%s): %s"
@@ -1344,6 +1274,28 @@ def _render_entry(entry, indent="  "):
         lines.append("")
         lines.extend(indent + line for line in entry["patch"].splitlines())
     return lines
+
+
+def _render_upgrade_proposals(result, lines):
+    lines.append("4b. UPGRADE PROPOSALS (%d)" % len(result["upgrade_proposals"]))
+    if not result["unused_quota"]:
+        lines.append(
+            "   none: no analysed window closed with quota measurably unused, so there is no headroom to "
+            "spend and nothing here proposes spending any."
+        )
+        return
+    lines.append(
+        "   the analysed windows left %s weighted tokens of quota unused. These name components whose "
+        "definition asks for a cheaper tier, that are listed in advice.opus_class_agents, and whose "
+        "upgrade fits inside that unused quota. Each one SPENDS; none of them is a saving."
+        % _num(result["unused_quota"])
+    )
+    if not result["upgrade_proposals"]:
+        lines.append("   none of the analysed components matched all three conditions.")
+        return
+    for entry in result["upgrade_proposals"]:
+        lines.append("")
+        lines.extend(_render_entry(entry))
 
 
 def _render_setting_proposals(result, lines):
@@ -1469,6 +1421,8 @@ def render(result):
         lines.append("")
         lines.extend(_render_entry(entry))
 
+    lines.append("")
+    _render_upgrade_proposals(result, lines)
     lines.append("")
     _render_setting_proposals(result, lines)
     lines.append("")

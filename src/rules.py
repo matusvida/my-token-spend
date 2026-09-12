@@ -1,4 +1,5 @@
 from collections import Counter, defaultdict
+from datetime import datetime
 
 import context
 
@@ -185,6 +186,20 @@ def agent_type_skew(records, config):
     ]
 
 
+MAX_THINKING_DEFAULT = 200
+DISPATCH_TOOL = "Agent"
+
+
+def trivial_turn(record, settings):
+    if record["output"] > settings["max_output_tokens"]:
+        return False
+    if not 1 <= len(record["tools"]) <= settings["max_tool_calls"]:
+        return False
+    if (record.get("thinking") or 0) > settings.get("max_thinking", MAX_THINKING_DEFAULT):
+        return False
+    return all(tool["name"] != DISPATCH_TOOL for tool in record["tools"])
+
+
 def model_mismatch(records, config):
     settings = config["thresholds"]["model_mismatch"]
     downgrade = settings["downgrade_model"]
@@ -194,9 +209,7 @@ def model_mismatch(records, config):
         weight = _model_weight(record, config)
         if weight <= downgrade_weight:
             continue
-        if record["output"] > settings["max_output_tokens"]:
-            continue
-        if not 1 <= len(record["tools"]) <= settings["max_tool_calls"]:
+        if not trivial_turn(record, settings):
             continue
         bucket = per_model[record["model"]]
         bucket["cost"] += (weight - downgrade_weight) * _raw_weighted(record, config)
@@ -205,8 +218,19 @@ def model_mismatch(records, config):
         _finding(
             "model_mismatch",
             model,
-            "%d trivial %s turns would have cost %s weighted tokens less on %s"
-            % (bucket["turns"], model, f"{bucket['cost']:,.0f}", downgrade),
+            "%d %s turns produced at most %d output tokens with between 1 and %d tool call(s), at most %d "
+            "thinking tokens and no %s dispatch among them; they would have cost %s weighted tokens less "
+            "on %s"
+            % (
+                bucket["turns"],
+                model,
+                settings["max_output_tokens"],
+                settings["max_tool_calls"],
+                settings.get("max_thinking", MAX_THINKING_DEFAULT),
+                DISPATCH_TOOL,
+                f"{bucket['cost']:,.0f}",
+                downgrade,
+            ),
             bucket["cost"],
             {"turns": bucket["turns"], "downgrade_model": downgrade},
         )
@@ -308,6 +332,145 @@ def whale_turns(records, config):
     ]
 
 
+HEADROOM_DEFAULTS = {"max_pct": 60, "min_thinking": 500, "min_output": 800, "min_serial_minutes": 20}
+QUOTA_METHODS = ("quota-fit", "override")
+
+
+def headroom_settings(config):
+    merged = dict(HEADROOM_DEFAULTS)
+    merged.update(config.get("headroom") or {})
+    return merged
+
+
+def _median(values):
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[middle])
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _stamp(value):
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _judgement_components(records, settings):
+    groups = defaultdict(list)
+    for record in records:
+        if record.get("attributionAgent"):
+            groups[("agent", record["attributionAgent"])].append(record)
+        if record.get("attributionSkill"):
+            groups[("skill", record["attributionSkill"])].append(record)
+    components = []
+    for (component, name), group in groups.items():
+        thinking = _median([record.get("thinking") or 0 for record in group])
+        output = _median([record["output"] for record in group])
+        if thinking <= settings["min_thinking"] and output <= settings["min_output"]:
+            continue
+        components.append(
+            {
+                "component": component,
+                "name": name,
+                "turns": len(group),
+                "weighted": sum(record["weighted"] for record in group),
+                "median_thinking": thinking,
+                "median_output": output,
+            }
+        )
+    components.sort(key=lambda item: (-item["weighted"], item["name"]))
+    return components
+
+
+def _runs_of(session):
+    runs = defaultdict(list)
+    for record in session:
+        if record.get("agentId"):
+            runs[record["agentId"]].append(record)
+    spans = []
+    for group in runs.values():
+        stamps = sorted(_stamp(record["ts"]) for record in group)
+        spans.append(
+            {
+                "start": stamps[0],
+                "end": stamps[-1],
+                "turns": len(group),
+                "weighted": sum(record["weighted"] for record in group),
+            }
+        )
+    return sorted(spans, key=lambda span: span["start"])
+
+
+def _peak_live(spans):
+    events = [(span["end"], -1) for span in spans] + [(span["start"], 1) for span in spans]
+    events.sort()
+    live = peak = 0
+    for _, delta in events:
+        live += delta
+        peak = max(peak, live)
+    return peak
+
+
+def _serial_sessions(records, settings):
+    sessions = []
+    for session_id, session in _by_session(records).items():
+        spans = _runs_of(session)
+        if len(spans) < 2 or _peak_live(spans) > 1:
+            continue
+        minutes = sum((span["end"] - span["start"]).total_seconds() for span in spans) / 60.0
+        if minutes < settings["min_serial_minutes"]:
+            continue
+        sessions.append(
+            {
+                "session": session_id,
+                "runs": len(spans),
+                "peak_live_runs": 1,
+                "minutes": round(minutes, 2),
+                "weighted": sum(span["weighted"] for span in spans),
+                "median_run_weighted": _median([span["weighted"] for span in spans]),
+                "cwd": session[-1]["cwd"],
+            }
+        )
+    sessions.sort(key=lambda item: (-item["minutes"], item["session"]))
+    return sessions
+
+
+def headroom(records, config, quota):
+    settings = headroom_settings(config)
+    if quota.get("method") not in QUOTA_METHODS or not quota.get("closed"):
+        return []
+    ceiling = quota.get("ceiling")
+    percent, previous = quota.get("percent_used"), quota.get("previous_percent_used")
+    if not ceiling or percent is None or previous is None:
+        return []
+    if percent >= settings["max_pct"] or previous >= settings["max_pct"]:
+        return []
+    spent = quota.get("spent") or 0.0
+    unused = max(0.0, ceiling - spent)
+    return [
+        _finding(
+            "headroom",
+            quota.get("window_key"),
+            "the window closed at %.0f%% of the weekly quota and the one before it at %.0f%%, so %s "
+            "weighted tokens of quota expired unused" % (percent, previous, f"{unused:,.0f}"),
+            unused,
+            {
+                "method": quota.get("method"),
+                "ceiling": ceiling,
+                "spent": spent,
+                "percent_used": percent,
+                "previous_percent_used": previous,
+                "max_pct": settings["max_pct"],
+                "unused_weighted": unused,
+                "components": _judgement_components(records, settings),
+                "serial_sessions": _serial_sessions(records, settings),
+                "extra_usage": quota.get("extra_usage"),
+            },
+        )
+    ]
+
+
 RULES = (
     context_bloat,
     subagent_storm,
@@ -319,10 +482,12 @@ RULES = (
 )
 
 
-def evaluate(records, config):
+def evaluate(records, config, quota=None):
     findings = []
     for rule in RULES:
         findings.extend(rule(records, config))
+    if quota is not None:
+        findings.extend(headroom(records, config, quota))
     findings.sort(key=lambda f: (-f["weighted_cost"], f["rule"], f["subject"] or "", f["detail"]))
     return findings
 

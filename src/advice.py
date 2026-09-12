@@ -1,9 +1,14 @@
+import agentfiles
 import paths
 import rules
 
 WASTE = "waste"
 STRATEGY = "strategy"
 HYGIENE = "hygiene"
+HEADROOM = "headroom"
+
+UPGRADE_FAMILY = "opus"
+CHEAP_FAMILIES = ("sonnet", "haiku")
 
 RULE_CLASS = {
     "model_mismatch": WASTE,
@@ -13,12 +18,14 @@ RULE_CLASS = {
     "agent_type_skew": STRATEGY,
     "context_bloat": HYGIENE,
     "whale_turns": HYGIENE,
+    "headroom": HEADROOM,
 }
 
 CONFIDENCE_WEIGHTS = {"high": 1.0, "medium": 0.6, "low": 0.3}
 
 DEFAULTS = {
     "sonnet_class_agents": [],
+    "opus_class_agents": [],
     "min_saving": 250000,
     "min_storms_for_median": 4,
     "min_whales_for_median": 4,
@@ -75,8 +82,11 @@ def _expensive_model_share(window_data, config):
     return expensive / total
 
 
-def _recommendation(kind, group, subject, title, action, detail, saving, risk, confidence, evidence):
+def _recommendation(
+    kind, group, subject, title, action, detail, saving, risk, confidence, evidence, headroom=None
+):
     return {
+        "weighted_headroom": headroom,
         "kind": kind,
         "group": group,
         "subject": subject,
@@ -104,19 +114,22 @@ def _model_downgrades(findings, config):
                 "Run trivial %s turns on %s" % (finding["subject"], target),
                 "Add `\"model\": \"%s\"` to the agent definitions that only fetch, grep or confirm, "
                 "and open one-tool sessions with `/model %s`." % (target, _model_family(target)),
-                "%d turns produced under %d output tokens with at most %d tool call. Priced at %s they "
-                "cost this much less. Only the token counts are identical: a tier change is a quality "
-                "tradeoff, and whether the cheaper tier reaches the same answers is recorded nowhere in "
-                "this data."
+                "%d turns produced at most %d output tokens with between 1 and %d tool call(s), at most "
+                "%d thinking tokens and no Agent dispatch among them. Priced at %s they cost this much "
+                "less. Only the token counts are identical: a tier change is a quality tradeoff, and "
+                "whether the cheaper tier reaches the same answers is recorded nowhere in this data. The "
+                "rule still cannot see what a turn decided, so a short answer reached after real "
+                "judgement is counted here too."
                 % (
                     turns,
                     config["thresholds"]["model_mismatch"]["max_output_tokens"],
                     config["thresholds"]["model_mismatch"]["max_tool_calls"],
+                    config["thresholds"]["model_mismatch"].get("max_thinking", rules.MAX_THINKING_DEFAULT),
                     target,
                 ),
                 finding["weighted_cost"],
                 "low",
-                "high",
+                "medium",
                 {"turns": turns, "downgrade_model": target},
             )
         )
@@ -341,11 +354,181 @@ def _split_whale_turns(findings, settings):
     ]
 
 
+
+def _resolve(component, name, roots):
+    matches = (
+        agentfiles.resolve_agent(name, roots)
+        if component == "agent"
+        else agentfiles.resolve_skill(name, roots)
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def _family_weight(family, pricing):
+    return rules.family_weights(pricing).get(family)
+
+
+def _upgrade_tier(evidence, unused, window_data, config, roots):
+    pricing = window_data.get("weights", config)
+    upgrade_weight = _family_weight(UPGRADE_FAMILY, pricing)
+    if not upgrade_weight:
+        return []
+    recommendations = []
+    for item in evidence["components"]:
+        path = _resolve(item["component"], item["name"], roots)
+        if path is None:
+            continue
+        declared = agentfiles.read_frontmatter(agentfiles._read(path))[0].get("model")
+        family = model_family(declared) if declared else None
+        if family not in CHEAP_FAMILIES:
+            continue
+        current = _family_weight(family, pricing)
+        if not current or upgrade_weight <= current:
+            continue
+        cost = item["weighted"] * (upgrade_weight / current - 1.0)
+        if cost <= 0 or cost > unused:
+            continue
+        recommendations.append(
+            _recommendation(
+                "upgrade_tier",
+                HEADROOM,
+                item["name"],
+                "Give %s the tier its work asks for" % item["name"],
+                "Set `model: %s` in %s." % (UPGRADE_FAMILY, path),
+                "%s ran %d turns for %s weighted tokens on %s, with a median of %s thinking and %s output "
+                "tokens per turn - the shape of judgement work rather than a lookup. The same volume on %s "
+                "costs about %s weighted tokens more, and the window left %s unused. Whether the answers "
+                "get better is recorded nowhere in this data."
+                % (
+                    item["name"],
+                    item["turns"],
+                    "{:,.0f}".format(item["weighted"]),
+                    family,
+                    "{:,.0f}".format(item["median_thinking"]),
+                    "{:,.0f}".format(item["median_output"]),
+                    UPGRADE_FAMILY,
+                    "{:,.0f}".format(cost),
+                    "{:,.0f}".format(unused),
+                ),
+                0.0,
+                "none",
+                "low",
+                {
+                    "file": str(path),
+                    "component": item["component"],
+                    "turns": item["turns"],
+                    "current_family": family,
+                    "target_family": UPGRADE_FAMILY,
+                    "median_thinking": item["median_thinking"],
+                    "median_output": item["median_output"],
+                },
+                headroom=cost,
+            )
+        )
+    return recommendations
+
+
+def _widen_fan_out(evidence, unused, roots):
+    sessions = evidence["serial_sessions"]
+    if not sessions:
+        return []
+    cap = agentfiles.parallel_cap(roots)
+    recommendations = []
+    for session in sessions:
+        cost = session["median_run_weighted"]
+        if cost <= 0 or cost > unused:
+            continue
+        where = (
+            "%s sets a cap of %d at a time" % (cap["path"], cap["cap"])
+            if cap
+            else "no parallel cap was found in the agent, skill and role files this tool searched, so the "
+            "limit that produced this shape is not named here"
+        )
+        recommendations.append(
+            _recommendation(
+                "widen_fan_out",
+                HEADROOM,
+                session["session"],
+                "Let session %s run its work side by side" % session["session"],
+                "Dispatch the independent runs in one message instead of one after the next.",
+                "%d runs in this session never overlapped: at most one was live at a time across %.0f "
+                "minutes of run time. %s. One more lane of comparable work costs about %s weighted tokens, "
+                "and the window left %s unused. Runs that depend on each other cannot be widened, and this "
+                "data does not record which ones did."
+                % (
+                    session["runs"],
+                    session["minutes"],
+                    where,
+                    "{:,.0f}".format(cost),
+                    "{:,.0f}".format(unused),
+                ),
+                0.0,
+                "medium",
+                "low",
+                {
+                    "session": session["session"],
+                    "runs": session["runs"],
+                    "minutes": session["minutes"],
+                    "cwd": session.get("cwd"),
+                    "parallel_cap": cap["cap"] if cap else None,
+                    "parallel_cap_file": str(cap["path"]) if cap else None,
+                },
+                headroom=cost,
+            )
+        )
+    return recommendations
+
+
+def _extra_usage_unused(evidence):
+    extra = evidence.get("extra_usage") or {}
+    limit = extra.get("monthly_limit")
+    if not extra.get("is_enabled") or (extra.get("used_credits") or 0) != 0 or not limit:
+        return []
+    return [
+        _recommendation(
+            "extra_usage_unused",
+            HEADROOM,
+            "extra usage",
+            "The overage budget went untouched",
+            "",
+            "Extra usage is enabled with a monthly limit of %s %s and nothing was drawn against it this "
+            "window. Whether that budget is there to be drawn on is your call, not this tool's."
+            % ("{:,.2f}".format(float(limit)), extra.get("currency") or ""),
+            0.0,
+            "none",
+            "low",
+            {
+                "monthly_limit": limit,
+                "currency": extra.get("currency"),
+                "used_credits": extra.get("used_credits"),
+            },
+            headroom=0.0,
+        )
+    ]
+
+
+def _headroom(window_data, findings, config, roots):
+    entries = _findings_of(findings, "headroom")
+    if not entries:
+        return []
+    evidence = max(entries, key=lambda item: item["weighted_cost"])["evidence"]
+    unused = evidence["unused_weighted"]
+    if roots is None:
+        roots = agentfiles.default_roots(
+            project_dirs=[bucket["key"] for bucket in window_data.get("by_repo") or [] if bucket["key"]]
+        )
+    return (
+        _upgrade_tier(evidence, unused, window_data, config, roots)
+        + _widen_fan_out(evidence, unused, roots)
+        + _extra_usage_unused(evidence)
+    )
+
+
 def score(recommendation):
     return recommendation["weighted_saving"] * CONFIDENCE_WEIGHTS[recommendation["confidence"]]
 
 
-def recommend(window_data, findings, config):
+def recommend(window_data, findings, config, roots=None):
     settings = _settings(config)
     total = window_data["totals"]["weighted"]
     recommendations = []
@@ -357,8 +540,12 @@ def recommend(window_data, findings, config):
     recommendations.extend(_reset_context(findings, config))
     recommendations.extend(_split_whale_turns(findings, settings))
     kept = [item for item in recommendations if item["weighted_saving"] >= settings["min_saving"]]
+    kept.extend(_headroom(window_data, findings, config, roots))
     for item in kept:
-        item["percent_of_window"] = 100.0 * item["weighted_saving"] / total if total else 0.0
+        basis = item["weighted_headroom"]
+        if basis is None:
+            basis = item["weighted_saving"]
+        item["percent_of_window"] = 100.0 * basis / total if total else 0.0
         item["score"] = score(item)
     kept.sort(key=lambda item: (-item["score"], item["kind"], item["subject"] or ""))
     return kept

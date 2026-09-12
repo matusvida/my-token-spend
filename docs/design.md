@@ -303,19 +303,50 @@ never speculates; a rule either fires with a number or does not fire.
 | Context bloat tax | `cache_read` climbing monotonically across a session — a long session never cleared. The finding text names what grew the context, from `context.py` | Tokens paid re-reading context above the configured threshold |
 | Subagent storm | Sidechain turn count and cost share per parent session | Total sidechain weighted cost for that session |
 | Agent-type skew | Weighted cost grouped by `attributionAgent` | Cost per agent type, ranked |
-| Model mismatch | Opus/Fable turns with one trivial tool call and short output | Difference between actual cost and the same turn priced at sonnet |
+| Model mismatch | Opus/Fable turns that are trivial on all four counts: output at or below `max_output_tokens`, between 1 and `max_tool_calls` tool calls, thinking at or below `max_thinking`, and no `Agent` call among them | Difference between actual cost and the same turn priced at sonnet |
 | Redundant reads | Identical tool input hash re-read repeatedly within a session | Cost of the repeat occurrences, each call charged its share of the turn by `result_chars` |
 | Loop / retry burn | Repeated near-identical tool calls, failed-then-retried sequences | Cost of the redundant attempts, charged the same way |
 | Whale turns | Top N single messages by weighted cost | The turn's own cost, labelled with the triggering user prompt |
+| Headroom | A closed window that ended under `headroom.max_pct` of a **known** quota, with the window before it under the same figure | The quota the window left unused, `ceiling - spent` |
 
 A turn's cost is split across its tool calls in proportion to `result_chars`, so
 a repeated 400 KB read carries its own weight and a repeated `ls` does not. When
 any call on the turn has no recorded result size, or every result was empty, the
 split falls back to an even one.
 
-Interface: `rules.evaluate(records, config) -> list[Finding]`. Depends on nothing
-but `config.json` thresholds — no I/O, so each rule is unit-testable against
-synthetic record lists.
+An `Agent` call is the orchestrator dispatching work, not a turn that should have
+run cheaper, and a turn that thought for hundreds of tokens before a short answer
+is judgement rather than a lookup. Both are excluded, and the finding text states
+all four conditions so the reader can judge the definition rather than trust it.
+
+The headroom rule is the one rule that needs more than the records. It fires only
+when the ceiling came from `quota-fit` or `override`, never from `top-cluster`: a
+user measured against their own heaviest weeks always looks near 100%, so unused
+quota would be an artefact of the measurement. It needs two consecutive quiet
+windows, so one quiet week never fires it, and it stays silent while a window is
+still open. Its evidence carries the components whose runs look like judgement
+work (median thinking above `headroom.min_thinking` or median output above
+`headroom.min_output`), the sessions whose subagent runs never overlapped for at
+least `headroom.min_serial_minutes`, and the window's untouched extra-usage budget.
+
+Interface: `rules.evaluate(records, config, quota=None) -> list[Finding]`. Depends
+on nothing but `config.json` thresholds — no I/O, so each rule is unit-testable
+against synthetic record lists. The optional `quota` block is what `collect`
+passes for the headroom rule: the window key, the ceiling method, whether the
+window has closed, the ceiling, the spend, this window's and the previous
+window's percentage, and the extra-usage budget if every sample in the window
+reported it enabled and undrawn.
+
+### `agentfiles.py` — where an agent or a skill is defined
+
+The root search (project `.claude`, user `.claude`, installed plugins, then
+marketplace trees as a fallback), the frontmatter reader, the name resolvers and
+the unified-diff builder. `tune` maps a cost centre onto its file through it, and
+`advice` prices a tier change through the same search, so both name the same file
+for the same component. It also answers "what parallel cap is written down", by
+scanning each root's own top-level `*.md` role files as well as its agent and
+skill files for a line that caps a number of things running in parallel; a file
+whose name mentions an orchestrator is read first.
 
 ### `context.py` — what grew the context
 
@@ -498,7 +529,9 @@ prompt_label_chars   how much of a user prompt is stored as a label, 400; raisin
 rootcause            drill-down share floor, centre and cluster caps, findings shown with a
                      root-cause line, label length
 thresholds           per-rule tuning
-advice               saving floors and the agent list judged safe to downgrade
+headroom             the under-spend cap and the thresholds that define judgement work
+advice               saving floors, the agent list judged safe to downgrade, and the agent list
+                     judged to need the top tier
 tune                 window counts, cost floors, built-in agent names, cheap families
 ```
 
@@ -836,6 +869,7 @@ Every rule belongs to exactly one class, and the class sets the tone of the advi
 | `waste` | model mismatch, redundant reads, loop / retry burn | Cost that bought nothing. Removing it changes what you pay, not what you get. |
 | `strategy` | subagent storm, agent-type skew | Cost that bought something real. The advice changes *how* the work is done, never whether it is done. |
 | `hygiene` | context bloat, whale turns | Habits rather than decisions. Cheap to change, and the change is a working style. |
+| `headroom` | headroom | Quota that expired unused. These spend rather than save, and each one names the specific work it would move. |
 
 The class boundary carries a hard design rule: no `strategy` recommendation is ever
 allowed to say "run fewer subagents". Fan-out is what the tool is for. A strategy
@@ -855,6 +889,16 @@ One recommendation kind per producer. `cost` below is a finding's `weighted_cost
 | `right_size_fan_out` | strategy | subagent storm | `sum over oversized storms of cost * (1 - median_turns / storm_turns)` — the cost of bringing only the above-median storms back to the median. |
 | `reset_context` | hygiene | context bloat | `sum(cost)` over every bloated session. |
 | `split_whale_turns` | hygiene | whale turns | `sum over oversized whales of (cost - median_cost)` — the excess of the biggest turns over the median whale. |
+| `upgrade_tier` | headroom | headroom | Not a saving. `weighted_headroom = component_weighted * (opus_weight / current_weight - 1)`, for a component whose definition file declares `model: sonnet` or `haiku` and whose runs show the judgement profile. Offered only when it fits inside the unused quota. |
+| `widen_fan_out` | headroom | headroom | Not a saving. `weighted_headroom` is the median weighted cost of one run in the session, which is what one more parallel lane of comparable work costs. Offered only when it fits inside the unused quota. |
+| `extra_usage_unused` | headroom | headroom | Neither a saving nor a price. One line stating the untouched overage budget in its own currency, with no action attached. |
+
+A headroom recommendation carries `weighted_saving = 0.0` and puts its figure in
+`weighted_headroom`, because presenting a spend in the saving column would be a
+lie in the one place the reader trusts most. `percent_of_window` is computed from
+whichever of the two is set. No headroom text tells the reader to use more tokens
+or to spend the remaining quota; every one that carries an action names the file
+or the session it would change.
 
 Two derived quantities, both read from the window's own embedded `weights` so a
 historical window is priced the way it was collected:
@@ -875,6 +919,8 @@ nothing exceeds the median produces nothing.
 ### Filtering and ranking
 
 A recommendation is dropped entirely below `advice.min_saving` (250,000 weighted).
+That floor is about savings, so headroom recommendations do not pass through it;
+their own gate is that the move fits inside the quota the window left unused.
 Survivors get `percent_of_window` and a `score`:
 
 ```
@@ -888,13 +934,16 @@ Each kind carries a fixed risk and confidence, which is what the score above use
 
 | Kind | Performance risk | Confidence |
 |---|---|---|
-| `model_downgrade` | none | high |
+| `model_downgrade` | none | medium |
 | `deduplicate_reads` | none | medium |
 | `break_retry_loops` | none | medium |
 | `reset_context` | low | medium |
 | `right_size_agent_tier` | low | medium |
 | `split_whale_turns` | low | low |
 | `right_size_fan_out` | medium | low |
+| `upgrade_tier` | none | low |
+| `widen_fan_out` | medium | low |
+| `extra_usage_unused` | none | low |
 
 Every recommendation carries `kind, group, subject, title, action, detail,
 weighted_saving, performance_risk, confidence, evidence`, plus `percent_of_window`
@@ -1205,11 +1254,26 @@ fitted to one week.
 
 Agents and skills are one kind of thing. Both resolve to files, both carry a per-run cost - per
 `agentId` for agents, per session for skills, since a skill has no invocation id in the data - and a
-median wall-clock per run. Skills additionally report their file size and description length,
-because a broad description is what pulls a file into turns that did not need it; the data cannot
-measure how often that happened and the output says so. Skill and plugin names are grouped by their
+median wall-clock per run. Skills additionally report their file size and description length as
+figures, with no conclusion drawn from either: a character count is not evidence that a skill loaded
+on turns that did not need it. Skill and plugin names are grouped by their
 `plugin:` prefix into a per-plugin total. No skill ever gets a modelled saving: its attributed cost
 is the cost of the work done under it, not the cost of loading it.
+
+## Proposals in both directions
+
+A file-level proposal moves a component down a tier and is gated by
+`advice.sonnet_class_agents`. The setting-level proposal for a built-in agent type, which moves
+every built-in subagent at once through `env.CLAUDE_CODE_SUBAGENT_MODEL`, passes the same gate: it
+is the widest change tune can name, so it is the last one that should be ungated. A built-in that is
+not on the list shows its cost with no proposal, as an unlisted file-level component does.
+
+The inverse proposal moves a component **up** a tier. It requires all of: the definition declares a
+cheap model, the name is listed in `advice.opus_class_agents`, an analysed window fired the headroom
+rule, the component cleared the same `min_windows_for_proposal` floor a downgrade must clear, and
+the priced increase fits inside the unused quota. It renders as its own section that states it
+spends rather than saves, and it emits the same kind of unified diff a downgrade does. A component
+on neither list is `NOT_ASSESSABLE` with its cost shown and no verdict either way.
 
 ## Wasted round trips
 
