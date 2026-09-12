@@ -291,6 +291,7 @@ def cmd_status(args):
 
 def cmd_tune(args):
     import roundtrips
+    import rules
     import tune
 
     home = paths.ensure_home()
@@ -319,7 +320,7 @@ def cmd_tune(args):
         trips = []
         for data in analysed:
             key = data["window"]["key"]
-            trips.append(dict(roundtrips.analyse(records_by_window.get(key) or [], index), key=key))
+            trips.append(dict(rules.round_trips(records_by_window.get(key) or [], index), key=key))
 
     result = tune.build(
         analysed,
