@@ -353,7 +353,7 @@ def tail_note(clusters):
     tail = clusters[-1] if clusters else None
     if not tail or tail.get("confidence") != TAIL:
         return None
-    return "%s are collapsed into the last bar, holding %s" % (tail["label"], _plural(tail["runs"], "run"))
+    return "the last bar holds %s" % _plural(tail["runs"], "run")
 
 
 def cluster_runs(runs, max_clusters=12):

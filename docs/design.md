@@ -456,7 +456,17 @@ self-contained HTML page. The reading path is, in order:
    skills, repos, models. Each footer states the coverage of the field its lane groups by.
 6. **Raw breakdowns** — every earlier section, collapsed and unchanged.
 7. **Recommendations** — the existing grouping, plus a `headroom` group that renders only when a
-   recommendation of that kind exists.
+   recommendation of that kind exists. Each group carries an `id="rec-<group>"` anchor, shows its two
+   largest cards and folds the rest into a `<details>`.
+
+**Under-spend is not a cause of spend.** The `headroom` finding's `weighted_cost` is the quota that
+expired unused, so it would lead every cost ranking on the page. It is excluded from the findings
+cards, the rule-lens tables, the delta decomposition's cause precedence and the console summary's top
+causes, and rendered instead as one line under the Verdict tiles — *"1.8B unused of your quota, two
+windows running"* — linking to `#rec-headroom`. A headroom recommendation carries its figure in
+`weighted_headroom`, not `weighted_saving`, so `report.figure_of` returns the value and its basis, the
+cards read "headroom, N% of the window" rather than a share of savings, and the recommendations table
+has a `basis` column.
 
 A spike must attribute to a named job, never to a taller unexplained bar.
 

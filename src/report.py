@@ -67,6 +67,8 @@ CAUSE_PRECEDENCE = [
     "agent_type_skew",
 ]
 
+HEADROOM_RULE = "headroom"
+
 SUBAGENT_ONLY_RULES = {"subagent_storm", "agent_type_skew"}
 GLOBAL_RULES = {"agent_type_skew", "model_mismatch"}
 
@@ -209,8 +211,19 @@ def _finding_matches_cell(finding, repo, lane):
     return repo_label(finding["evidence"].get("cwd")) == repo
 
 
+def spend_findings(window):
+    return [f for f in window["findings"] if f["rule"] != HEADROOM_RULE]
+
+
+def headroom_finding(window):
+    for finding in window["findings"]:
+        if finding["rule"] == HEADROOM_RULE:
+            return finding
+    return None
+
+
 def choose_cause(window, repo, lane):
-    candidates = [f for f in window["findings"] if _finding_matches_cell(f, repo, lane)]
+    candidates = [f for f in spend_findings(window) if _finding_matches_cell(f, repo, lane)]
     if not candidates:
         return None
     candidates.sort(key=lambda f: (CAUSE_PRECEDENCE.index(f["rule"]), -f["weighted_cost"]))
@@ -910,7 +923,7 @@ def _whales_section(window):
 
 
 def _findings_section(window):
-    by_rule = window["findings_by_rule"]
+    by_rule = {rule: stats for rule, stats in window["findings_by_rule"].items() if rule != HEADROOM_RULE}
     rows = [
         [
             RULE_LABELS.get(rule, rule),
@@ -920,7 +933,7 @@ def _findings_section(window):
         ]
         for rule, stats in sorted(by_rule.items(), key=lambda item: -item[1]["weighted_cost"])
     ]
-    top = sorted(window["findings"], key=lambda finding: -finding["weighted_cost"])[:12]
+    top = sorted(spend_findings(window), key=lambda finding: -finding["weighted_cost"])[:12]
     detail_rows = [
         [
             RULE_LABELS.get(finding["rule"], finding["rule"]),
@@ -977,19 +990,32 @@ GROUP_TITLES = [
     (
         "strategy",
         "Strategy cost - tune it, never cut it",
-        "Right-size the workers and the batch size; never run fewer agents.",
+        "Right-size the workers, never run fewer agents.",
     ),
     ("hygiene", "Hygiene - cheap habits", "How a session is opened and fed."),
     (
         "headroom",
         "Headroom - quota you did not use",
-        "Work on a cheaper tier than it needs.",
+        "Work running below the tier it needs.",
     ),
 ]
 
-GROUP_CARDS = 3
+GROUP_CARDS = 2
 
 RISK_WORDS = {"none": "no performance risk", "low": "low performance risk", "medium": "medium performance risk"}
+
+
+def figure_of(item):
+    headroom = item.get("weighted_headroom")
+    if headroom is None:
+        return item["weighted_saving"], "saving"
+    return headroom, "headroom"
+
+
+def _share_line(item):
+    value, basis = figure_of(item)
+    share = percent(item["percent_of_window"])
+    return share + " of the window" if basis == "saving" else "headroom, %s of the window" % share
 
 
 def _recommendation_card(item):
@@ -998,15 +1024,15 @@ def _recommendation_card(item):
         '<details><summary>What to change</summary>'
         '<div class="rec-action">%s</div><div class="rec-detail">%s</div></details></div>'
         '<div class="rec-figures"><div class="rec-saving">%s</div>'
-        '<div class="rec-share">%s of the window</div>'
+        '<div class="rec-share">%s</div>'
         '<div class="badge risk-%s"><span class="dot"></span>%s</div>'
         '<div class="badge">%s confidence</div></div></div>'
         % (
             esc(item["title"]),
             _inline_code(item["action"]),
             esc(item["detail"]),
-            esc(compact(item["weighted_saving"])),
-            esc(percent(item["percent_of_window"])),
+            esc(compact(figure_of(item)[0])),
+            esc(_share_line(item)),
             esc(item["performance_risk"]),
             esc(RISK_WORDS[item["performance_risk"]]),
             esc(item["confidence"]),
@@ -1027,7 +1053,7 @@ def _protected_agents(window, recommendations):
         return ""
     names = ", ".join(row["key"] for row in protected)
     return (
-        '<p class="sub">Left alone, as judgement work: %s.</p>' % esc(names)
+        '<p class="sub">Left alone as judgement work: %s.</p>' % esc(names)
     )
 
 
@@ -1040,17 +1066,18 @@ def _recommendations_section(window, recommendations):
     bars = [
         {
             "label": clip(item["title"], 26),
-            "value": item["weighted_saving"],
-            "tip": "%s\n%s weighted (%s of the window)\n%s, %s confidence"
+            "value": figure_of(item)[0],
+            "tip": "%s\n%s weighted %s (%s of the window)\n%s, %s confidence"
             % (
                 item["title"],
-                exact(item["weighted_saving"]),
+                exact(figure_of(item)[0]),
+                figure_of(item)[1],
                 percent(item["percent_of_window"]),
                 RISK_WORDS[item["performance_risk"]],
                 item["confidence"],
             ),
         }
-        for item in sorted(recommendations, key=lambda entry: -entry["weighted_saving"])
+        for item in sorted(recommendations, key=lambda entry: -figure_of(entry)[0])
     ]
     groups = []
     for key, title, note in GROUP_TITLES:
@@ -1066,25 +1093,26 @@ def _recommendations_section(window, recommendations):
             )
         extra = _protected_agents(window, recommendations) if key == "strategy" else ""
         groups.append(
-            '<div class="rec-group"><div class="rec-group-head"><h3>%s</h3>'
+            '<div class="rec-group" id="rec-%s"><div class="rec-group-head"><h3>%s</h3>'
             '<span class="rec-group-note">%s</span></div>%s%s</div>'
-            % (esc(title), esc(note), extra, cards)
+            % (esc(key), esc(title), esc(note), extra, cards)
         )
     return (
         '<section class="card"><h2>Recommendations</h2>'
-        '<p class="sub">Each saving comes from one rule; the rules overlap, so they are '
-        "<strong>never added into a total</strong>.</p>"
+        '<p class="sub">One rule per figure; they overlap and are <strong>never added into a '
+        "total</strong>.</p>"
         '<details><summary>Ranked overview</summary><div class="chart-wrap">%s</div></details>%s%s</section>'
         % (
             svg_ranked_bars(bars, label_width=330),
             "".join(groups),
             table_view(
-                ["recommendation", "class", "weighted saving", "of window", "risk", "confidence", "action"],
+                ["recommendation", "class", "basis", "weighted", "of window", "risk", "confidence", "action"],
                 [
                     [
                         item["title"],
                         item["group"],
-                        exact(item["weighted_saving"]),
+                        figure_of(item)[1],
+                        exact(figure_of(item)[0]),
                         percent(item["percent_of_window"]),
                         item["performance_risk"],
                         item["confidence"],
@@ -1270,16 +1298,30 @@ def _verdict_section(window, previous, recommendations):
     return (
         '<section class="card verdict"><h2>%s</h2>'
         '<p class="sub">%s to %s, %s.</p>'
-        '<div class="tiles">%s</div>%s</section>'
+        '<div class="tiles">%s</div>%s%s</section>'
         % (
             esc(window["window"]["key"]),
             esc(window["window"]["start"]),
             esc(window["window"]["end"]),
             esc(window["window"]["timezone"]),
             "".join(tiles),
+            _headroom_line(window, recommendations),
             _burn_chart(window),
         )
     )
+
+
+def _headroom_line(window, recommendations):
+    finding = headroom_finding(window)
+    if finding is None:
+        return ""
+    unused = esc(compact(finding["evidence"]["unused_weighted"]))
+    if any(item["group"] == "headroom" for item in recommendations or []):
+        return (
+            '<p class="sub"><a href="#rec-headroom">%s unused of your quota, two windows running</a></p>'
+            % unused
+        )
+    return '<p class="sub">%s unused of your quota, two windows running.</p>' % unused
 
 
 REC_RULES = {
@@ -1299,28 +1341,38 @@ OVERLAP_NOTICE = (
 )
 
 
-def _action_card(item, anchors, config):
-    anchor = REC_RULES.get(item["kind"])
-    rule = (anchor or "").split("-")[0]
-    threshold = evidence.threshold_text(rule, config) if rule else ""
-    link = (
-        '<a href="#%s">see the chart</a>' % esc(anchor)
-        if anchor in anchors
-        else "no chart: the rule behind it did not fire on this window"
+def _headroom_threshold(config):
+    return "under %d%% of the quota in this window and the one before" % (
+        (config.get("headroom") or {}).get("max_pct", 60)
     )
+
+
+def _action_card(item, anchors, config):
+    if item["group"] == "headroom":
+        anchor, threshold = "rec-headroom", _headroom_threshold(config)
+        link = '<a href="#rec-headroom">see the headroom group</a>'
+    else:
+        anchor = REC_RULES.get(item["kind"])
+        rule = (anchor or "").split("-")[0]
+        threshold = evidence.threshold_text(rule, config) if rule else ""
+        link = (
+            '<a href="#%s">see the chart</a>' % esc(anchor)
+            if anchor in anchors
+            else "no chart: the rule behind it did not fire on this window"
+        )
     return (
         '<div class="rec"><div><div class="rec-title">%s</div>'
         '<div class="rec-action">Counted at %s.</div><div class="rec-detail">%s</div></div>'
         '<div class="rec-figures"><div class="rec-saving">%s</div>'
-        '<div class="rec-share">%s of the window</div>'
+        '<div class="rec-share">%s</div>'
         '<div class="badge risk-%s"><span class="dot"></span>%s</div>'
         '<div class="badge">%s confidence</div></div></div>'
         % (
             esc(item["title"]),
             esc(threshold or "the rule threshold"),
             link,
-            esc(compact(item["weighted_saving"])),
-            esc(percent(item["percent_of_window"])),
+            esc(compact(figure_of(item)[0])),
+            esc(_share_line(item)),
             esc(item["performance_risk"]),
             esc(RISK_WORDS[item["performance_risk"]]),
             esc(item["confidence"]),
@@ -1543,7 +1595,7 @@ def _finding_card(card, window, analysis, store):
     )
     return (
         '<div class="finding" id="%s"><div class="finding-head"><span class="finding-rule">%s</span>'
-        '<span class="finding-subject">%s</span><span class="finding-cost">%s weighted</span></div>'
+        '<span class="finding-subject">%s</span><span class="finding-cost">%s</span></div>'
         '<div class="finding-detail">%s</div>'
         '<div class="finding-threshold">Counted at %s.</div>%s%s%s</div>'
         % (
@@ -1598,7 +1650,7 @@ def _findings_cards_section(window, analysis, store):
 def _round_trip_card(card):
     return (
         '<div class="finding" id="%s"><div class="finding-head"><span class="finding-rule">round trips</span>'
-        '<span class="finding-subject">%s failed</span><span class="finding-cost">%s weighted</span></div>'
+        '<span class="finding-subject">%s failed</span><span class="finding-cost">%s</span></div>'
         '<div class="finding-detail">Tool calls that came back as an error, and the calls that failed again '
         "on the same input.</div>"
         '<div class="finding-threshold">Counted at %s.</div>%s</div>'
@@ -1648,7 +1700,7 @@ def _lanes_section(window, analysis, store):
     total = window["totals"]["weighted"]
     return (
         '<section class="card"><h2>Cost centres</h2>'
-        '<p class="sub">The same window ranked six ways; each footer states its coverage.</p>%s%s</section>'
+        '<p class="sub">Six rankings of the same window, each footer stating its coverage.</p>%s%s</section>'
         % (
             _shortfall_notice(store),
             "".join(_lane_block(lane, total) for lane in analysis["evidence"]["lanes"]),
@@ -1829,7 +1881,7 @@ def _narrative_section(narrative):
         blocks.append("<ul>%s</ul>" % "".join("<li>%s</li>" % esc(item) for item in bullets))
     return (
         '<section class="card narrative" data-narrative="%s"><h2>Why this week looked like this</h2>%s'
-        '<p class="sub">Written by one headless Claude call over the numbers above.</p></section>'
+        '<p class="sub">Written by one headless Claude call.</p></section>'
         % (esc(narrative.strip()), "".join(blocks))
     )
 
@@ -2157,10 +2209,16 @@ def console_summary(windows, target, recommendations=None):
     for item in (recommendations or [])[:3]:
         lines.append(
             "    %-46s %s weighted (%s, %s risk)"
-            % (item["title"][:46], compact(item["weighted_saving"]), percent(item["percent_of_window"]), item["performance_risk"])
+            % (
+                item["title"][:46],
+                compact(figure_of(item)[0]),
+                percent(item["percent_of_window"]),
+                item["performance_risk"],
+            )
         )
     lines.append("  top causes         :")
-    for rule, stats in sorted(target["findings_by_rule"].items(), key=lambda item: -item[1]["weighted_cost"])[:3]:
+    causes = {rule: stats for rule, stats in target["findings_by_rule"].items() if rule != HEADROOM_RULE}
+    for rule, stats in sorted(causes.items(), key=lambda item: -item[1]["weighted_cost"])[:3]:
         lines.append(
             "    %-18s %s weighted across %d findings"
             % (RULE_LABELS.get(rule, rule), compact(stats["weighted_cost"]), stats["count"])

@@ -619,7 +619,7 @@ def test_clusters_beyond_the_cap_collapse_into_a_tail_that_counts_its_runs():
     tail = clusters[-1]
     assert tail["runs"] == 8
     assert tail["confidence"] == "not clustered"
-    assert rootcause.tail_note(clusters) == "8 smaller job clusters are collapsed into the last bar, holding 8 runs"
+    assert rootcause.tail_note(clusters) == "the last bar holds 8 runs"
 
 
 def test_a_cluster_list_that_fits_the_cap_has_no_tail_note():

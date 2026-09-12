@@ -1000,7 +1000,7 @@ def test_the_actions_name_a_threshold_and_link_to_their_chart():
     html = report.render_html([window], window, recommendations=[recommendation()], analysis=analysed(window, records))
     actions = html.split("<h2>Do these first</h2>")[1].split("</section>")[0]
     assert "Run trivial claude-opus-5 turns on claude-sonnet-5" in actions
-    assert "turns under 250 output tokens with at most 1 tool call" in actions
+    assert "under 250 output tokens, at most 1 tool call" in actions
     assert "Cost is not waste" in actions
 
 

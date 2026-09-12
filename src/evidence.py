@@ -4,25 +4,26 @@ import rules
 SCATTER_POINTS = 400
 TIMELINE_RUNS = 6
 TABLE_ROWS = 4
-LANE_ROWS = 4
+LANE_ROWS = 3
 
 RULE_GROUPS = {"context_bloat": 1, "subagent_storm": 1, "agent_type_skew": 1}
 ROUND_TRIPS = "round_trips"
+HEADROOM = "headroom"
 
 
 def threshold_text(rule, config):
     if rule == ROUND_TRIPS:
-        return "every stored tool call whose result came back as an error"
+        return "any tool call whose result came back an error"
     settings = config["thresholds"]
     if rule == "context_bloat":
         block = settings["context_bloat"]
-        return "sessions of %d turns or more, counted above %s cache-read tokens a turn" % (
+        return "%d+ turn sessions, above %s cache-read tokens a turn" % (
             block["min_turns"],
             "{:,}".format(block["cache_read_per_turn"]),
         )
     if rule == "subagent_storm":
         block = settings["subagent_storm"]
-        return "%d subagent turns or more, and at least %.0f%% of the session" % (
+        return "%d+ subagent turns and %.0f%%+ of the session" % (
             block["min_sidechain_turns"],
             100.0 * block["min_cost_share"],
         )
@@ -34,19 +35,19 @@ def threshold_text(rule, config):
         )
     if rule == "model_mismatch":
         block = settings["model_mismatch"]
-        return "turns under %d output tokens with at most %d tool call, above %s weighted per model" % (
+        return "under %d output tokens, at most %d tool call, above %s weighted" % (
             block["max_output_tokens"],
             block["max_tool_calls"],
             "{:,}".format(block["min_total_weighted"]),
         )
     if rule == "redundant_reads":
         block = settings["redundant_reads"]
-        return "%d or more identical inputs to %s in one session" % (
+        return "%d+ identical inputs to %s in one session" % (
             block["min_repeats"],
             ", ".join(block["tools"]),
         )
     if rule == "loop_retry":
-        return "%d or more identical calls back to back" % settings["loop_retry"]["min_repeats"]
+        return "%d+ identical calls back to back" % settings["loop_retry"]["min_repeats"]
     if rule == "whale_turns":
         return "the %d costliest single turns" % settings["whale_turns"]["top_n"]
     return ""
@@ -259,6 +260,8 @@ def _card(rule, findings, chart, config, anchor, index, hidden=0):
 def cards(window, records, config, agent_calls=None):
     by_rule = {}
     for index, finding in enumerate(window["findings"]):
+        if finding["rule"] == HEADROOM:
+            continue
         by_rule.setdefault(finding["rule"], []).append((index, finding))
     built = []
     for rule, entries in by_rule.items():
