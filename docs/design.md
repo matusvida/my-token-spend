@@ -292,6 +292,11 @@ Reads the OAuth token Claude Code stores, calls `oauth/usage` with a 10 s timeou
 and appends one sample per collect. It never refreshes the token and never writes
 anything on a failure. See [Reset instant](#reset-instant).
 
+The poll carries the HTTP status back to the collector. On a 429 the collector stamps
+`quota_throttled_at` into `state.json` and skips the poll entirely for the next
+`collect.THROTTLE_MINUTES` (30), so a daily cron plus a handful of manual runs never hammer a
+rate-limited endpoint. Any other outcome clears the stamp.
+
 ### `rules.py` — the reasons engine
 
 Pure functions over a window's normalized records. Each rule returns zero or more
@@ -445,15 +450,24 @@ self-contained HTML page. The reading path is, in order:
 
 1. **Verdict** — four tiles (quota or ceiling used with the method named, weighted spent, list-price
    USD, the share of subagent spend no agent type claims) over a seven-day burn line against the
-   quota with the reset instant marked.
+   ceiling with the reset instant marked. The reference line is labelled *quota* only when the
+   ceiling came from a usage sample or a config override, and *estimated ceiling* otherwise, so it
+   never contradicts the tile above it. The axis runs over every calendar day from the window start,
+   zero-filled, because `by_day` holds only days with spend.
 2. **Do these first** — at most three cards, each one claim, the threshold it was counted at, one
    number, a risk and a confidence badge, and a link to its finding's chart. The overlap notice
    appears here, once.
-3. **Why this week looked like this** — the narrative, capped at 120 words.
+3. **Why this week looked like this** — the narrative, capped at 120 words. When no narrative
+   exists the section is not rendered at all; one line takes its place naming what writes one, the
+   `claude` CLI on PATH.
 4. **Findings** — one card per finding group, carrying exactly one chart or table as its evidence.
    Everything else, the root-cause line included, sits behind a `<details>`.
-5. **Cost centres** — one ranked bar chart per lane: description-named jobs, MCP servers, plugins,
-   skills, repos, models. Each footer states the coverage of the field its lane groups by.
+5. **Cost centres** — one ranked bar chart per lane: jobs by dispatch description where recovered,
+   MCP servers, plugins, skills, repos, models. Each footer states the coverage of the field its lane
+   groups by. Clusters carrying a recovered label hold the head of the jobs ranking; every other
+   cluster groups by agent type and repo into a bar reading *"31 more general-purpose runs in
+   product-promotion-service"*, drawn in the derived colour the legend names. The lane draws the six
+   largest such groups and its footer says how many it left out.
 6. **Raw breakdowns** — every earlier section, collapsed and unchanged.
 7. **Recommendations** — the existing grouping, plus a `headroom` group that renders only when a
    recommendation of that kind exists. Each group carries an `id="rec-<group>"` anchor, shows its two
@@ -473,7 +487,9 @@ A spike must attribute to a named job, never to a taller unexplained bar.
 **One chart per rule.** `context_bloat` draws the session's context over time, coloured by the tool
 whose results grew it, with the threshold line and the compaction markers. `subagent_storm` draws a
 run timeline labelled with the orchestrator's descriptions, so overlap is visible. `model_mismatch`
-is a scatter of output tokens against tool calls with the counted-trivial region drawn as a box.
+is a strip of output tokens against thinking tokens, coloured by model, with the counted region drawn
+as a box and its criteria stated in the top-right corner. Tool count is not an axis: the rule admits
+exactly one tool call, so plotting it would imply a spread that does not exist.
 `agent_type_skew` is a bar per job cluster with the no-run-id residual as its own bar. `whale_turns`
 decomposes the costliest turns by token class. `redundant_reads`, `loop_retry` and the round-trip
 detectors get tables.
@@ -1299,6 +1315,11 @@ evidence-backed:
 | same input re-issued after it failed, and failed again | the above plus the record's tool hash | 0.00-0.16% |
 | permission-denied call | the record's own `denied` flag, set from the error text at collection | 0-2 per window |
 | turn the API errored | the collector's `is_api_error` | ~0.00% |
+
+The card headline and cost are the window totals from the failed-call detector, not the subtotal of
+the tools the table happens to show; when the table is truncated its footer says *"top 4 of N
+tools"*. The failed-again calls are a subset already inside that figure, so the sentence reads
+*including*, never *and*, and the two are never added.
 
 The retry detector counts only repeats that failed again. A repeat that succeeded is the recovery,
 not the waste, and counting it both priced the healthy outcome as loss and let the detector's count
