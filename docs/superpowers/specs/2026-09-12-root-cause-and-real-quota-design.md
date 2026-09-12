@@ -94,11 +94,9 @@ When an assistant entry carries a `tool_use` block named `Agent`, `normalize` al
 
 `{tool_use_id, ts, sessionId, parent_uuid, description, subagent_type, model, prompt_chars, prompt_head}` with `prompt_head` clipped to `prompt_label_chars`.
 
-Every subagent transcript's user entries carry `sourceToolUseID`. `normalize` writes it to the record as `source_tool_use_id` on every turn of that subagent file, taken from the first user entry that has it.
+`sourceToolUseID` on subagent transcripts points at Skill calls inside the subagent, never at the dispatching Agent call (0 of 623 files matched on this machine), so it cannot carry the join. The join is on the dispatch prompt instead: session id plus the first 200 normalized characters of the subagent's first user prompt, teammate envelope stripped, matched against the stored `prompt_head`; ties go to the latest call at or before the run started. Measured: 487 of 623 subagent files join uniquely.
 
-`rootcause.group_runs` joins runs to agent calls on `agentId -> source_tool_use_id -> tool_use_id`. A run then carries the orchestrator's `description`, its requested `model`, and its prompt size. `cluster_runs` keys on `description` first. Only runs without a joined call fall back to the derived tool-mix label. Cluster confidence gains a top level, `named`, meaning every member carries an orchestrator description.
-
-The measured join coverage on this machine is 244 of 622 subagent files. The report states coverage on every cluster list: "descriptions recovered for 61% of runs". Old records without the field stay in the derived-label path.
+`rootcause.group_runs` attaches the joined call to the run, so a run carries the orchestrator's `description`, its requested `model`, and its prompt size. `cluster_runs` keys on `description` first. Only runs without a joined call fall back to the derived tool-mix label. Cluster confidence gains a top level, `named`, meaning every member carries an orchestrator description. The report states coverage on every cluster list: "descriptions recovered for N% of runs". Old records without a matching call stay in the derived-label path.
 
 ### Schema and durability
 
