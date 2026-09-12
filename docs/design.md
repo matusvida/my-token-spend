@@ -260,12 +260,31 @@ same file.
 Interface: `collect.run(...)` and `collect.recut(...)`, reached from the CLI as
 `collect [--backfill] [--recut-windows] [--reprice] [--rebuild-from-transcripts-only]
 [--window YYYY-MM-DD]`.
-Depends on `config.json`, `state.json`, `rules.py`, `context.py`.
+Depends on `config.json`, `state.json`, `rules.py`, `context.py`, `cost.py`.
 
 Window boundaries are evaluated in the zone named by `config.timezone`. A `null` value — the shipped
 default — means the machine's own zone, resolved through a `tzinfo` derived from the platform so
 that daylight saving is honoured for historical timestamps rather than frozen at today's offset.
 Pinning an IANA name keeps boundaries stable for someone who moves between zones.
+
+### `cost.py` — the list-price USD figure
+
+Claude Code writes a `cost-state` entry into the transcript after every turn, carrying the session's
+running `totalCostUSD` and per-model token counts. The last such entry in a session is that session's
+total, so `collect` keeps the last one it has seen per file and merges them into
+`data/session_costs.json`, which is durable and never shrinks: a pruned transcript keeps its price.
+
+A window's USD is the sum over the sessions whose **first** record falls inside it, so a session that
+straddles a reset is priced once, in the window it started in. The figure is labelled *list price, as
+`/cost` shows it; not what the subscription bills* everywhere it is shown — it is Claude Code's own
+estimate of what the same tokens would have cost on the API, not a billing figure.
+
+`collect --calibrate-weights` fits, per model, the four token-class prices that best explain the
+stored session totals (least squares over `input`, `output`, `cache_create`, `cache_read`), divides
+them by the input price, and prints the result next to the configured `token_class_weights`. It needs
+at least eight sessions per model and refuses a fit whose residual exceeds 5% of the spend or whose
+prices are not all positive, because sessions with near-identical token mixes cannot separate four
+classes. It writes nothing; changing the weights stays a human decision.
 
 ### `quota.py` — the real quota and its reset instant
 

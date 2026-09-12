@@ -80,10 +80,14 @@ def window_totals(data_dir):
 
 def cmd_collect(args):
     import collect
+    import cost
     import quota
 
     home = paths.ensure_home()
     config = load_config(home)
+    if args.calibrate_weights:
+        print(cost.calibrate_report(cost.calibrate(cost.load(paths.data_dir(home)), config)))
+        return 0
     if args.recut_windows and (args.backfill or args.rebuild_from_transcripts_only):
         raise CliError("--recut-windows re-buckets the stored records and cannot be combined with a transcript re-read")
     if args.reprice and (args.backfill or args.rebuild_from_transcripts_only or args.recut_windows or args.window):
@@ -563,6 +567,11 @@ def build_parser():
         "--reprice",
         action="store_true",
         help="re-price every stored record with the current weights and rewrite every window; reads the store only",
+    )
+    collect_parser.add_argument(
+        "--calibrate-weights",
+        action="store_true",
+        help="print the token-class weights the stored list-price totals imply, next to the configured ones, and exit",
     )
     collect_parser.add_argument("--window", metavar="YYYY-MM-DD", help="write only the window starting on this date")
     collect_parser.set_defaults(func=cmd_collect)

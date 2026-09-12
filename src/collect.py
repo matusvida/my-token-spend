@@ -10,6 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import context
+import cost
 import quota
 import rules
 
@@ -256,6 +257,7 @@ def read_file(path, config, stored):
             "malformed": 0,
             "pending_results": {},
             "agent_calls": [],
+            "cost": stored.get("cost"),
         }
 
     resume = bool(stored) and size > stored["size"]
@@ -264,6 +266,7 @@ def read_file(path, config, stored):
     carried_malformed = stored.get("malformed", 0) if resume else 0
     source_tool_use_id = stored.get("source_tool_use_id") if resume else None
     after_compaction = bool(stored.get("pending_compaction")) if resume else False
+    session_cost = stored.get("cost") if resume else None
 
     with path.open("rb") as handle:
         handle.seek(offset)
@@ -295,6 +298,9 @@ def read_file(path, config, stored):
             continue
         if not isinstance(entry, dict):
             malformed += 1
+            continue
+        if entry.get("type") == "cost-state":
+            session_cost = cost.capture(entry) or session_cost
             continue
         if entry.get("type") == "user":
             prompt = _prompt_text(entry, limit)
@@ -336,10 +342,12 @@ def read_file(path, config, stored):
             "malformed": carried_malformed + malformed,
             "source_tool_use_id": source_tool_use_id,
             "pending_compaction": after_compaction,
+            "cost": session_cost,
         },
         "malformed": malformed,
         "pending_results": pending_results,
         "agent_calls": calls,
+        "cost": session_cost,
     }
 
 
@@ -551,7 +559,7 @@ def field_coverage(records):
     return covered
 
 
-def aggregate_window(start_date, records, config, parse_stats, ceiling, instants=None):
+def aggregate_window(start_date, records, config, parse_stats, ceiling, instants=None, costs=None, owned_sessions=None):
     tz = zone(config)
     start_utc, end_utc, boundary_source = window_bounds(start_date, config, instants)
     start_local, end_local = start_utc.astimezone(tz), end_utc.astimezone(tz)
@@ -612,6 +620,9 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling, instants
         "unknown_models": _breakdown(unpriced_records(records, config), lambda r: r["model"]),
         "field_coverage": field_coverage(records),
         "context": context.window_block(records, config),
+        "cost_usd": cost.window_block(
+            owned_sessions if owned_sessions is not None else {r["sessionId"] for r in records}, costs or {}
+        ),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
         "ceiling": ceiling_block(
@@ -798,7 +809,7 @@ def _prune_window(store_dir, data_dir, reports_dir, key):
             path.unlink()
 
 
-def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None):
+def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None, costs=None):
     samples = samples or []
     instants = quota.reset_instants(samples)
     windows = {
@@ -820,10 +831,13 @@ def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, win
         instants=instants,
     )
     written = []
+    owned = cost.sessions_by_window(windows)
     for start, records in windows.items():
         if (window and start != window) or not records:
             continue
-        aggregate = aggregate_window(date.fromisoformat(start), records, config, parse_stats, ceiling, instants)
+        aggregate = aggregate_window(
+            date.fromisoformat(start), records, config, parse_stats, ceiling, instants, costs, owned.get(start, set())
+        )
         key = aggregate["window"]["key"]
         _write_json(data_dir / (key + ".json"), aggregate)
         (reports_dir / (key + ".md")).write_text(render_markdown(aggregate), encoding="utf-8")
@@ -869,7 +883,7 @@ def recut(config, out_dir, state_path, window=None):
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
     windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples, cost.load(data_dir)
     )
     merge_agent_calls(store_dir, [], config, instants=instants)
     return {
@@ -918,7 +932,7 @@ def reprice(config, out_dir, state_path):
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
     windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, None, samples
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, None, samples, cost.load(data_dir)
     )
     return {
         "windows": written,
@@ -1028,6 +1042,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
     fresh = []
     fresh_calls = []
+    fresh_costs = []
     pending_results = {}
     for path in files:
         key = str(path.resolve())
@@ -1036,6 +1051,8 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         fresh.extend(result["records"])
         pending_results.update(result["pending_results"])
         fresh_calls.extend(result["agent_calls"])
+        if result["cost"]:
+            fresh_costs.append(result["cost"])
 
     state["files"] = {k: v for k, v in state["files"].items() if Path(k).exists()}
     malformed_total = sum(entry.get("malformed", 0) for entry in state["files"].values())
@@ -1062,8 +1079,9 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         )
 
     parse_stats = {"files_scanned": len(files), "malformed_lines": malformed_total}
+    costs = cost.merge(data_dir, fresh_costs, discard_stored=rebuild_from_transcripts_only)
     windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples, costs
     )
     calls = merge_agent_calls(
         store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only, instants=instants
