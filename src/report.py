@@ -10,6 +10,7 @@ import sys
 import traceback
 
 import advice
+import collect
 import paths
 import rootcause
 
@@ -110,7 +111,8 @@ def analysis_for(window, config, data_dir=None):
     if read_error is not None:
         return None, store
     try:
-        return rootcause.analyse(window, records, config), store
+        calls = collect.load_agent_calls(os.path.join(data_dir or default_data_dir(), "records"))
+        return rootcause.analyse(window, records, config, calls), store
     except (KeyError, TypeError, ValueError) as error:
         store["analysis_error"] = "%s: %s" % (type(error).__name__, error)
         print(
@@ -1592,6 +1594,8 @@ def _centre_block(centre):
         % percent(100.0 * centre["coverage"]["share"]),
         "models: %s" % ", ".join(centre["models"]),
     ]
+    if centre.get("descriptions"):
+        notes.append(rootcause.description_note_of(centre["descriptions"]))
     if centre["ungrouped_turns"]:
         notes.append(
             "%s turns (%s weighted) carry no %s id and are outside every cluster"

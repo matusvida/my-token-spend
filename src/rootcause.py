@@ -171,18 +171,38 @@ def label_capture(records, config):
     }
 
 
-def group_runs(records, key=RUN_ID_KEY, label_chars=90):
+def group_runs(records, key=RUN_ID_KEY, label_chars=90, agent_calls=None):
     grouped = defaultdict(list)
     for record in records:
         identity = record.get(key)
         if identity:
             grouped[identity].append(record)
-    runs = [_describe_run(identity, turns, label_chars) for identity, turns in grouped.items()]
+    runs = [_describe_run(identity, turns, label_chars, agent_calls or {}) for identity, turns in grouped.items()]
     runs.sort(key=lambda run: (-run["weighted"], run["id"]))
     return runs
 
 
-def _describe_run(identity, turns, label_chars):
+def description_coverage(runs):
+    described = sum(1 for run in runs if run.get("description"))
+    return {"described": described, "runs": len(runs), "share": (described / len(runs)) if runs else 0.0}
+
+
+def description_note_of(counted):
+    return "descriptions recovered for %s of runs" % _share(counted["described"], counted["runs"])
+
+
+def description_note(runs):
+    return description_note_of(description_coverage(runs))
+
+
+def _dispatch_of(turns, agent_calls):
+    if not agent_calls:
+        return {}
+    source, _ = _modal(record.get("source_tool_use_id") for record in turns)
+    return agent_calls.get(source) or {}
+
+
+def _describe_run(identity, turns, label_chars, agent_calls=None):
     turns = sorted(turns, key=lambda record: (record["ts"], record.get("uuid") or ""))
     tools = tool_counts(turns)
     categories = category_counts(tools)
@@ -191,8 +211,12 @@ def _describe_run(identity, turns, label_chars):
     agent, agent_mixed = _modal(record.get("attributionAgent") for record in turns)
     skill, _ = _modal(record.get("attributionSkill") for record in turns)
     session, _ = _modal(record.get("sessionId") for record in turns)
+    dispatch = _dispatch_of(turns, agent_calls)
     return {
         "id": identity,
+        "description": dispatch.get("description"),
+        "requested_model": dispatch.get("model"),
+        "prompt_chars": dispatch.get("prompt_chars"),
         "agent": agent,
         "skill": skill,
         "session": session,
@@ -240,7 +264,12 @@ def _agreement(runs, reference):
     return shared / len(others)
 
 
+DESCRIPTION = "description"
+
+
 def _cluster_key(run):
+    if run.get("description"):
+        return (DESCRIPTION, run["description"])
     mcp = tuple(sorted(name for name in run["categories"] if name.startswith("mcp:")))
     return (
         run["agent"] or "unattributed",
@@ -269,7 +298,17 @@ def derived_label(run):
     )
 
 
+def _cluster_label(reference, label_source):
+    if label_source == DESCRIPTION:
+        return reference["description"]
+    if label_source == "prompt":
+        return reference["label"]
+    return derived_label(reference)
+
+
 def _confidence(members, agreement, mixed, tool_share, label_source):
+    if label_source == DESCRIPTION and all(run.get("description") for run in members):
+        return "named"
     if len(members) == 1:
         return "single run"
     if label_source == "derived":
@@ -291,10 +330,11 @@ def cluster_runs(runs, max_clusters=8):
     for key, members in grouped.items():
         members.sort(key=lambda run: (-run["weighted"], run["id"]))
         reference = members[0]
+        named = key[0] == DESCRIPTION
         usable = label_usable(reference["label"])
         agreement = _agreement(members, reference) if usable else 0.0
-        mixed = usable and agreement < 0.3 and len(members) > 1
-        label_source = "prompt" if usable and not mixed else "derived"
+        mixed = not named and usable and agreement < 0.3 and len(members) > 1
+        label_source = DESCRIPTION if named else ("prompt" if usable and not mixed else "derived")
         turns = sum(run["turns"] for run in members)
         tool_turns = sum(run["tool_turns"] for run in members)
         tools = Counter()
@@ -303,15 +343,16 @@ def cluster_runs(runs, max_clusters=8):
         clusters.append(
             {
                 "key": key,
-                "agent": key[0],
-                "repo": key[1],
-                "branch": key[2],
-                "dominant": key[3],
-                "writes": key[4],
-                "mcp": list(key[5]),
-                "label": reference["label"] if label_source == "prompt" else derived_label(reference),
+                "agent": reference["agent"] or "unattributed",
+                "repo": reference["repo"],
+                "branch": reference["branch"] or "unknown branch",
+                "dominant": reference["dominant"],
+                "writes": WRITE in reference["categories"],
+                "mcp": sorted(name for name in reference["categories"] if name.startswith("mcp:")),
+                "label": _cluster_label(reference, label_source),
                 "label_source": label_source,
                 "runs": len(members),
+                "described_runs": sum(1 for run in members if run.get("description")),
                 "turns": turns,
                 "median_turns": float(median([run["turns"] for run in members])),
                 "weighted": sum(run["weighted"] for run in members),
@@ -326,7 +367,7 @@ def cluster_runs(runs, max_clusters=8):
                     agreement,
                     mixed,
                     (tool_turns / turns) if turns else 0.0,
-                    "prompt" if usable else "derived",
+                    label_source if named else ("prompt" if usable else "derived"),
                 ),
                 "members": members,
                 "other_labels": [run["label"] for run in members[1:4]],
@@ -349,6 +390,7 @@ def cluster_runs(runs, max_clusters=8):
             "label": "%d smaller job clusters" % len(tail),
             "label_source": "derived",
             "runs": sum(cluster["runs"] for cluster in tail),
+            "described_runs": sum(cluster["described_runs"] for cluster in tail),
             "turns": sum(cluster["turns"] for cluster in tail),
             "median_turns": 0.0,
             "weighted": sum(cluster["weighted"] for cluster in tail),
@@ -533,7 +575,7 @@ def _storm_because(finding, index):
     sidechain = [record for record in session if record.get("isSidechain")]
     if not sidechain:
         return None
-    runs = group_runs(sidechain)
+    runs = group_runs(sidechain, agent_calls=index["agent_calls"])
     ungrouped = [record for record in sidechain if not record.get(RUN_ID_KEY)]
     timing = overlap(runs)
     mix = _agent_mix(sidechain)
@@ -572,6 +614,7 @@ def _storm_because(finding, index):
             % (_plural(timing["peak"], "run"), timing["overlapping_runs"], len(runs))
         )
         points.extend("job cluster: " + _cluster_line(cluster) for cluster in clusters)
+        points.append(description_note(runs))
     if ungrouped:
         points.append(
             "%s of these subagent turns carry no agentId (%s weighted), so they are not inside any run above"
@@ -629,7 +672,7 @@ def _skew_because(finding, index):
     turns = [record for record in index["records"] if record.get("attributionAgent") == agent]
     if not turns:
         return None
-    runs = group_runs(turns)
+    runs = group_runs(turns, agent_calls=index["agent_calls"])
     clusters = cluster_runs(runs, max_clusters=index["max_clusters"])
     ungrouped = [record for record in turns if not record.get(RUN_ID_KEY)]
     if clusters:
@@ -648,6 +691,7 @@ def _skew_because(finding, index):
             agent,
         )
     points = ["job cluster: " + _cluster_line(cluster) for cluster in clusters]
+    points.append(description_note(runs))
     if ungrouped:
         points.append(
             "%s turns attributed to %s carry no agentId (%s weighted) and are not in any cluster"
@@ -790,13 +834,14 @@ BECAUSE_BUILDERS = {
 }
 
 
-def _index(records, config, max_clusters):
+def _index(records, config, max_clusters, agent_calls=None):
     return {
         "records": records,
         "config": config,
         "sessions": _sessions(records),
         "by_uuid": {record["uuid"]: record for record in records if record.get("uuid")},
         "max_clusters": max_clusters,
+        "agent_calls": agent_calls or {},
     }
 
 
@@ -812,9 +857,9 @@ def _settings(config):
     return shipped
 
 
-def explain(window, records, config):
+def explain(window, records, config, agent_calls=None):
     settings = _settings(config)
-    index = _index(records, config, settings["max_clusters"])
+    index = _index(records, config, settings["max_clusters"], agent_calls)
     out = []
     for finding in window["findings"]:
         builder = BECAUSE_BUILDERS.get(finding["rule"])
@@ -825,7 +870,7 @@ def explain(window, records, config):
     return out
 
 
-def centres(window, records, config):
+def centres(window, records, config, agent_calls=None):
     settings = _settings(config)
     total = window["totals"]["weighted"] or 0.0
     floor = total * settings["min_centre_share"]
@@ -842,7 +887,7 @@ def centres(window, records, config):
             weighted = sum(record["weighted"] for record in turns)
             if weighted < floor:
                 continue
-            runs = group_runs(turns, key=key, label_chars=settings["label_chars"])
+            runs = group_runs(turns, key=key, label_chars=settings["label_chars"], agent_calls=agent_calls)
             ungrouped = [record for record in turns if not record.get(key)]
             found.append(
                 {
@@ -855,6 +900,7 @@ def centres(window, records, config):
                     "run_unit": "run" if key == RUN_ID_KEY else "session",
                     "clusters": cluster_runs(runs, max_clusters=settings["max_clusters"]),
                     "coverage": coverage(turns),
+                    "descriptions": description_coverage(runs),
                     "ungrouped_turns": len(ungrouped),
                     "ungrouped_weighted": sum(record["weighted"] for record in ungrouped),
                     "tools": tool_counts(turns),
@@ -865,15 +911,17 @@ def centres(window, records, config):
     return found[: settings["max_centres"]]
 
 
-def analyse(window, records, config):
+def analyse(window, records, config, agent_calls=None):
     if not records:
         return None
+    runs = group_runs(records, agent_calls=agent_calls)
     return {
         "records": len(records),
         "coverage": coverage(records),
         "labels": label_capture(records, config),
         "max_findings": _settings(config)["max_findings"],
-        "becauses": explain(window, records, config),
-        "centres": centres(window, records, config),
-        "runs": len(group_runs(records)),
+        "becauses": explain(window, records, config, agent_calls),
+        "centres": centres(window, records, config, agent_calls),
+        "runs": len(runs),
+        "descriptions": description_coverage(runs),
     }

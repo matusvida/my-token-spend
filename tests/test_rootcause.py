@@ -452,3 +452,87 @@ def test_no_because_line_asserts_a_motive_or_calls_a_cost_wasteful():
         text = " ".join([because["text"]] + because["points"]).lower()
         for phrase in banned:
             assert phrase not in text, "%r appeared in %r" % (phrase, text)
+
+
+def _dispatch(call_id, description, model="opus", prompt_chars=900):
+    return {
+        "tool_use_id": call_id,
+        "ts": ts(0),
+        "sessionId": "s1",
+        "parent_uuid": "p1",
+        "description": description,
+        "subagent_type": "general-purpose",
+        "model": model,
+        "prompt_chars": prompt_chars,
+        "prompt_head": description,
+    }
+
+
+def _dispatched_records(pairs):
+    records = []
+    for index, (run_id, call_id) in enumerate(pairs):
+        for turn in range(3):
+            record = rec(
+                ts(turn, hour=10 + index),
+                sidechain=True,
+                run=run_id,
+                agent="general-purpose",
+                tools=(("Bash", "h%d%d" % (index, turn)),),
+                output=10,
+                prompt="do a thing",
+                uuid="u%d%d" % (index, turn),
+            )
+            record["source_tool_use_id"] = call_id
+            records.append(record)
+    return records
+
+
+def test_a_run_carries_the_description_of_the_call_that_dispatched_it():
+    calls = {"toolu_1": _dispatch("toolu_1", "Implement section 2")}
+    run = rootcause.group_runs(_dispatched_records([("r0", "toolu_1")]), agent_calls=calls)[0]
+    assert run["description"] == "Implement section 2"
+    assert run["requested_model"] == "opus"
+    assert run["prompt_chars"] == 900
+
+
+def test_a_run_with_no_matching_dispatch_carries_no_description():
+    run = rootcause.group_runs(_dispatched_records([("r0", "toolu_missing")]), agent_calls={})[0]
+    assert run["description"] is None
+    assert run["requested_model"] is None
+
+
+def test_runs_with_the_same_description_cluster_together_whatever_their_tools():
+    calls = {
+        "toolu_1": _dispatch("toolu_1", "Review the merge request"),
+        "toolu_2": _dispatch("toolu_2", "Review the merge request"),
+    }
+    records = _dispatched_records([("r0", "toolu_1"), ("r1", "toolu_2")])
+    clusters = rootcause.cluster_runs(rootcause.group_runs(records, agent_calls=calls))
+    assert len(clusters) == 1
+    assert clusters[0]["label"] == "Review the merge request"
+    assert clusters[0]["label_source"] == "description"
+    assert clusters[0]["runs"] == 2
+
+
+def test_a_cluster_whose_runs_all_carry_a_description_is_named():
+    calls = {"toolu_1": _dispatch("toolu_1", "Review the merge request")}
+    clusters = rootcause.cluster_runs(
+        rootcause.group_runs(_dispatched_records([("r0", "toolu_1")]), agent_calls=calls)
+    )
+    assert clusters[0]["confidence"] == "named"
+
+
+def test_a_run_without_a_description_still_falls_back_to_the_derived_label():
+    calls = {"toolu_1": _dispatch("toolu_1", "Review the merge request")}
+    records = _dispatched_records([("r0", "toolu_1"), ("r1", "toolu_missing")])
+    clusters = rootcause.cluster_runs(rootcause.group_runs(records, agent_calls=calls))
+    labels = sorted(cluster["label"] for cluster in clusters)
+    assert "Review the merge request" in labels
+    assert any(cluster["label_source"] == "derived" for cluster in clusters)
+
+
+def test_a_cluster_list_states_how_many_runs_a_description_was_recovered_for():
+    calls = {"toolu_1": _dispatch("toolu_1", "Review the merge request")}
+    runs = rootcause.group_runs(_dispatched_records([("r0", "toolu_1"), ("r1", "toolu_missing")]), agent_calls=calls)
+    assert rootcause.description_coverage(runs) == {"described": 1, "runs": 2, "share": 0.5}
+    assert rootcause.description_note(runs) == "descriptions recovered for 50% of runs"

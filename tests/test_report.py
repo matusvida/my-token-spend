@@ -1281,3 +1281,24 @@ def test_a_rebuild_gets_root_causes_and_still_calls_no_api(tmp_path, monkeypatch
         rebuilt = handle.read()
     assert "The work behind it: 4 subagent runs" in rebuilt
     assert report.read_stamp(stale_page)["narrative"] == "Subagents ate the week."
+
+
+def test_a_cluster_list_states_how_many_runs_a_description_was_recovered_for():
+    import rootcause
+
+    window, records = storm_window()
+    for index, record in enumerate(records):
+        record["source_tool_use_id"] = "toolu_1" if index < 12 else None
+    calls = {
+        "toolu_1": {
+            "tool_use_id": "toolu_1",
+            "description": "Rebase the pricing branch",
+            "model": "opus",
+            "prompt_chars": 400,
+        }
+    }
+    analysis = rootcause.analyse(window, records, CONFIG, calls)
+    html = report.render_html([window], window, analysis=analysis)
+    drill = html.split("What the big cost centres did")[1]
+    assert "Rebase the pricing branch" in drill
+    assert "descriptions recovered for 50% of runs" in drill
