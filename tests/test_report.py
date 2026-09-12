@@ -1563,3 +1563,22 @@ def test_whale_labels_stay_at_minute_resolution_when_nothing_collides():
     assert [row["label"] for row in chart["rows"]] == ["05:40", "06:40"]
     assert [row.get("sublabel") for row in chart["rows"]] == [None, None]
     assert "05:40:00" in report._whale_chart_html(chart)
+
+
+def test_the_burn_axis_tops_out_near_the_window_it_draws():
+    import charts
+
+    svg = charts.svg_burn(["09-05"], [887_015_163.0], 1_283_915_540.0, "reset", "estimated ceiling")
+    ticks = [float(value) * 1e9 for value in re.findall(r'class="tick"[^>]*>([0-9.]+)B<', svg)]
+    assert max(ticks) >= 1_283_915_540.0
+    assert max(ticks) <= 1_283_915_540.0 * 1.1
+    assert "estimated ceiling 1.3B" in svg
+
+
+def test_the_burn_axis_still_clears_a_series_above_the_ceiling():
+    import charts
+
+    svg = charts.svg_burn(["09-05"], [1_739_908_484.0], 1_283_915_540.0, "reset")
+    ticks = [float(value) * 1e9 for value in re.findall(r'class="tick"[^>]*>([0-9.]+)B<', svg)]
+    assert max(ticks) >= 1_739_908_484.0
+    assert max(ticks) <= 1_739_908_484.0 * 1.1

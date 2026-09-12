@@ -92,6 +92,17 @@ def nice_ticks(maximum, count=4):
     return ticks
 
 
+def ticks_within(maximum, limit, counts=(4, 5, 6, 7, 8, 9, 10)):
+    best = None
+    for count in counts:
+        ticks = nice_ticks(maximum, count)
+        if ticks[-1] <= limit:
+            return ticks
+        if best is None or ticks[-1] < best[-1]:
+            best = ticks
+    return best
+
+
 def esc(text):
     return html.escape(str(text), quote=True)
 
@@ -694,7 +705,8 @@ def svg_scatter(chart, height=320):
 
 def svg_burn(labels, cumulative, ceiling, reset_label, ceiling_label="ceiling", height=300):
     left, top, width, plot_height = _plot_box(height)
-    ticks = nice_ticks(max(cumulative + [ceiling or 0.0, 1.0]))
+    reached = max(cumulative + [ceiling or 0.0, 1.0])
+    ticks = ticks_within(reached, reached * 1.1)
     top_tick = ticks[-1]
     step = width / max(1, len(labels) - 1) if len(labels) > 1 else width
 
