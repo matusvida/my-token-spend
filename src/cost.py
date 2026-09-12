@@ -5,6 +5,7 @@ from pathlib import Path
 STORE_NAME = "session_costs.json"
 LABEL = "list price, as /cost shows it; not what the subscription bills"
 MIN_SESSIONS = 8
+MAX_INSTABILITY = 0.3
 CLASSES = ("input", "output", "cache_create", "cache_read")
 SOURCE_FIELDS = {
     "input": "inputTokens",
@@ -106,12 +107,17 @@ def _fit_prices(samples):
             for column in range(size):
                 matrix[row][column] += counts[CLASSES[row]] * counts[CLASSES[column]]
     solution = _solve(matrix, vector)
-    if solution is None or any(price <= 0 for price in solution):
+    return None if solution is None else dict(zip(CLASSES, solution))
+
+
+def _instability(samples):
+    half = len(samples) // 2
+    first, second = _fit_prices(samples[:half]), _fit_prices(samples[half:])
+    if first is None or second is None:
         return None
-    prices = dict(zip(CLASSES, solution))
-    spend = sum(usd for _, usd in samples)
-    residual = sum(abs(sum(prices[cls] * counts[cls] for cls in CLASSES) - usd) for counts, usd in samples)
-    return prices if spend > 0 and residual / spend < 0.05 else None
+    return max(
+        abs(first[cls] - second[cls]) / max(abs(first[cls]), abs(second[cls]), 1e-18) for cls in CLASSES
+    )
 
 
 def _samples_by_model(costs):
@@ -146,10 +152,19 @@ def calibrate(costs, config):
         else:
             prices = _fit_prices(samples)
             if prices is None or prices["input"] <= 0:
-                row["reason"] = "the token counts in these sessions do not separate the four classes"
+                row["reason"] = "these sessions put no positive price on fresh input, so nothing can be "                    "normalised against it"
             else:
                 row["implied"] = {cls: prices[cls] / prices["input"] for cls in CLASSES}
                 row["price_per_input_token"] = prices["input"]
+                row["instability"] = _instability(samples)
+                if any(weight <= 0 for weight in row["implied"].values()):
+                    row["reason"] = "unstable: the fit prices at least one token class at or below zero"
+                elif row["instability"] is None or row["instability"] > MAX_INSTABILITY:
+                    row["reason"] = (
+                        "unstable: the two halves of the sample disagree by %s, so the token mixes in "
+                        "these sessions are too alike to separate the four classes"
+                        % ("more than half" if row["instability"] is None else "%.0f%%" % (100.0 * row["instability"]))
+                    )
         rows.append(row)
     reference = min(
         (row["price_per_input_token"] for row in rows if row.get("price_per_input_token")), default=None
@@ -189,4 +204,6 @@ def calibrate_report(rows):
             )
         )
         lines.append("  %-32s %-9s %d sessions of list-price totals" % ("", "from", row["sessions"]))
+        if row["reason"]:
+            lines.append("  %-32s %-9s %s" % ("", "warning", row["reason"]))
     return "\n".join(lines)

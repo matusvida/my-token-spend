@@ -106,6 +106,7 @@ def test_calibrate_recovers_the_prices_that_generated_the_sessions():
     }
     rows = cost.calibrate(costs, config)
     opus = [row for row in rows if row["model"] == "claude-opus-5"][0]
+    assert opus["reason"] is None
     assert opus["sessions"] == 12
     assert abs(opus["implied"]["output"] - 5.0) < 0.05
     assert abs(opus["implied"]["cache_read"] - 0.1) < 0.01
@@ -135,7 +136,7 @@ def test_calibrate_report_names_both_sides():
     assert "no cost-state" in text
 
 
-def test_calibrate_refuses_a_fit_the_session_mix_cannot_support():
+def test_calibrate_refuses_a_fit_with_no_positive_price():
     costs = {}
     for index in range(12):
         counts = {"input": 100 + index, "output": 200 + 2 * index, "cache_create": 300 + 3 * index,
@@ -147,7 +148,31 @@ def test_calibrate_refuses_a_fit_the_session_mix_cannot_support():
               "model_weights": {}, "default_model_weight": 1.0}
     row = cost.calibrate(costs, config)[0]
     assert row["implied"] is None
-    assert "separate" in row["reason"]
+    assert "positive price" in row["reason"]
+
+
+def test_calibrate_marks_an_unstable_fit_rather_than_hiding_it():
+    early = {"input": 3e-6, "output": 15e-6, "cache_create": 3.75e-6, "cache_read": 0.3e-6}
+    late = dict(early, output=45e-6)
+    rng = random.Random(5)
+    costs = {}
+    for index in range(16):
+        counts = {
+            "input": rng.randrange(500, 40000),
+            "output": rng.randrange(100, 9000),
+            "cache_create": rng.randrange(1000, 90000),
+            "cache_read": rng.randrange(10000, 900000),
+        }
+        prices = early if index < 8 else late
+        usd = sum(prices[cls] * counts[cls] for cls in prices)
+        costs["s%02d" % index] = {"session": "s%02d" % index, "usd": usd,
+                                  "models": {"m": dict(counts, usd=usd)}}
+    config = {"token_class_weights": {"input": 1.0, "cache_create": 1.25, "cache_read": 0.1, "output": 5.0},
+              "model_weights": {}, "default_model_weight": 1.0}
+    row = cost.calibrate(costs, config)[0]
+    assert row["implied"] is not None
+    assert "unstable" in row["reason"]
+    assert "unstable" in cost.calibrate_report([row])
 
 
 def test_calibrate_weights_prints_both_sides_and_writes_nothing(monkeypatch, tmp_path, capsys):
