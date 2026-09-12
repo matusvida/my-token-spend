@@ -117,6 +117,9 @@ CORNER = 4
 GAP = 2
 
 
+INSIDE_LABEL_SHARE = 0.6
+
+
 def _plot_box(height=PLOT_HEIGHT):
     return (
         MARGIN["left"],
@@ -260,9 +263,15 @@ def svg_ranked_bars(rows, color="--series-1", label_width=280, row_height=32):
                 esc(row["tip"]),
             )
         )
+        inside = length > INSIDE_LABEL_SHARE * track
         parts.append(
-            '<text class="value-label" x="%.2f" y="%.2f">%s</text>'
-            % (label_width + length + 10, y + bar_height / 2 + 4, esc(compact(row["value"])))
+            '<text class="value-label%s" x="%.2f" y="%.2f">%s</text>'
+            % (
+                " inside" if inside else "",
+                label_width + (10 if inside else length + 10),
+                y + bar_height / 2 + 4,
+                esc(compact(row["value"])),
+            )
         )
     parts.append("</svg>")
     return "".join(parts)

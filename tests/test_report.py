@@ -1519,3 +1519,18 @@ def test_runs_sharing_one_derived_label_are_told_apart_by_their_start_clock():
     assert labels[0].endswith(" 10:00")
     runs[0]["label"] = "a different job entirely"
     assert charts.run_labels(runs)[0] == "a different job entirely"
+
+
+def test_a_long_bars_value_label_is_drawn_inside_the_bar():
+    import charts
+
+    rows = [
+        {"label": "biggest", "value": 1000.0, "tip": "t"},
+        {"label": "tiny", "value": 20.0, "tip": "t"},
+    ]
+    svg = charts.svg_ranked_bars(rows, label_width=280)
+    labels = re.findall(r'<text class="value-label( inside)?" x="([0-9.]+)"', svg)
+    assert labels[0][0] == " inside"
+    assert labels[1][0] == ""
+    track = charts.PLOT_WIDTH - 280 - 140
+    assert float(labels[0][1]) < 280 + track

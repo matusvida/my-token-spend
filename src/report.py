@@ -495,6 +495,7 @@ svg.chart { width: 100%; min-width: 620px; height: auto; display: block; }
 .axis-label.strong { fill: var(--text-primary); font-weight: 600; }
 .row-label { fill: var(--text-primary); font-variant-numeric: normal; }
 .value-label { fill: var(--text-primary); font-weight: 600; }
+.value-label.inside { fill: var(--surface-1); }
 .mark { cursor: default; }
 .mark:hover, .mark:focus { opacity: 0.82; outline: none; }
 .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
