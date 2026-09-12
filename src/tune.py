@@ -639,13 +639,7 @@ def _skill_entry(centre, roots):
     else:
         note = (
             "cost is the turns attributed to this skill, not the cost of loading it. Its file is %s bytes "
-            "and its description is %d characters.%s"
-            % (
-                "{:,}".format(body),
-                len(description),
-                " That description is broad enough to pull the file in on turns that did not need it, "
-                "which this data cannot measure - read it and judge." if len(description) > 200 else "",
-            )
+            "and its description is %d characters." % ("{:,}".format(body), len(description))
         )
     return _entry(
         centre,

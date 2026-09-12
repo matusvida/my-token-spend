@@ -436,6 +436,7 @@ def test_a_skill_is_reported_with_its_file_size_and_description_length_and_no_sa
     assert entry["description_chars"] == 300
     assert entry["file_bytes"] > 0
     assert "not the cost of loading it" in entry["note"]
+    assert "broad enough" not in entry["note"]
 
 
 def test_a_cost_per_run_far_above_the_others_is_flagged_without_a_saving(home):
