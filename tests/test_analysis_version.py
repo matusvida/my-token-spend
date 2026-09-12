@@ -221,3 +221,46 @@ def test_the_collect_console_stays_silent_when_nothing_is_stale(workspace, capsy
     )
     assert cli.cmd_collect(args) == 0
     assert "re-analysed" not in capsys.readouterr().out
+
+
+def test_report_refuses_a_window_analysed_by_an_older_rules_revision(workspace, capsys):
+    import report
+
+    run(workspace)
+    age_the_stamp(workspace, "week_2026_08_22", version=rules.ANALYSIS_VERSION - 1)
+    argv = [
+        "--no-narrative",
+        "--data-dir", str(workspace["out"] / "data"),
+        "--report-dir", str(workspace["out"] / "reports"),
+    ]
+    with pytest.raises(SystemExit) as raised:
+        report.main(argv)
+    message = str(raised.value)
+    assert "week_2026_08_22" in message
+    assert "collect" in message
+
+
+def test_report_refuses_a_window_with_no_analysis_stamp_at_all(workspace):
+    import report
+
+    run(workspace)
+    age_the_stamp(workspace, "week_2026_08_29")
+    with pytest.raises(SystemExit):
+        report.main([
+            "--no-narrative",
+            "--data-dir", str(workspace["out"] / "data"),
+            "--report-dir", str(workspace["out"] / "reports"),
+        ])
+
+
+def test_report_renders_once_every_window_is_current(workspace):
+    import report
+
+    run(workspace)
+    age_the_stamp(workspace, "week_2026_08_22")
+    run(workspace)
+    assert report.main([
+        "--no-narrative",
+        "--data-dir", str(workspace["out"] / "data"),
+        "--report-dir", str(workspace["out"] / "reports"),
+    ]) == 0

@@ -17,6 +17,7 @@ import cost
 import evidence
 import paths
 import rootcause
+import rules
 import text
 from charts import (
     clip,
@@ -163,6 +164,15 @@ def load_windows(data_dir=None):
             windows.append(json.load(handle))
     windows.sort(key=lambda w: w["window"]["start"])
     return windows
+
+
+def stale_analysis(windows):
+    return [
+        window["window"]["key"]
+        for window in windows
+        if not isinstance(window.get("analysis_version"), int)
+        or window["analysis_version"] < rules.ANALYSIS_VERSION
+    ]
 
 
 def window_key(date_str):
@@ -2379,6 +2389,13 @@ def main(argv=None):
     windows = load_windows(data_dir)
     if not windows:
         raise SystemExit("no window files in %s - run collect first" % data_dir)
+    stale = stale_analysis(windows)
+    if stale:
+        raise SystemExit(
+            "%s was analysed by an older revision of the rules, so its findings would read in language "
+            "this build no longer uses. Nothing was rendered. Bring it up to date with: collect"
+            % ", ".join(stale)
+        )
     target = select_target(windows, args.window)
 
     config = load_config(args.config)

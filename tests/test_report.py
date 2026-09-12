@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import report
+import rules
 
 
 WEIGHTS = {
@@ -77,6 +78,7 @@ def make_window(start="2026-08-22", sessions=None, findings=None, is_current=Tru
         entry["weighted_cost"] += item["weighted_cost"]
     return {
         "schema_version": 1,
+        "analysis_version": rules.ANALYSIS_VERSION,
         "generated_at": "2026-08-27T19:36:20.305811+00:00",
         "window": {
             "key": "week_" + start.replace("-", "_"),
