@@ -346,7 +346,17 @@ def _confidence(members, agreement, mixed, tool_share, label_source):
     return "low"
 
 
-def cluster_runs(runs, max_clusters=8):
+TAIL = "not clustered"
+
+
+def tail_note(clusters):
+    tail = clusters[-1] if clusters else None
+    if not tail or tail.get("confidence") != TAIL:
+        return None
+    return "%s are collapsed into the last bar, holding %s" % (tail["label"], _plural(tail["runs"], "run"))
+
+
+def cluster_runs(runs, max_clusters=12):
     grouped = defaultdict(list)
     for run in runs:
         grouped[_cluster_key(run)].append(run)
@@ -424,7 +434,7 @@ def cluster_runs(runs, max_clusters=8):
             "tool_share": 0.0,
             "agreement": 0.0,
             "mixed": True,
-            "confidence": "not clustered",
+            "confidence": TAIL,
             "members": [],
             "other_labels": [],
         }
@@ -873,7 +883,7 @@ def _settings(config):
     shipped = {
         "min_centre_share": 0.03,
         "max_centres": 6,
-        "max_clusters": 8,
+        "max_clusters": 12,
         "max_findings": 12,
         "label_chars": 90,
     }

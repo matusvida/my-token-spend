@@ -397,6 +397,12 @@ description, so the label is quoted rather than inferred. A cluster whose runs s
 but not a job label is printed as `MIXED`. Not every run can be joined to its dispatch, so every
 cluster list states the share of runs a description was recovered for.
 
+**Cluster cap.** A description names one job, so most description clusters hold a single run and a
+window produces far more clusters than the eight the tool-mix labels used to produce. Clusters are
+ranked by weighted cost and the first `rootcause.max_clusters` (12) are kept; everything below folds
+into one tail bar, and `tail_note` states how many clusters and how many runs that bar holds, so the
+collapsed remainder is never silently dropped.
+
 **Tool coverage is stated, never hidden.** `tools` is populated on roughly half the turns — a
 text-only turn records none — so every per-cluster and per-finding tool share is accompanied by the
 share of turns that recorded any tool call at all.
