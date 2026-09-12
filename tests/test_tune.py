@@ -309,16 +309,21 @@ def test_a_single_window_analysis_lowers_the_floor_and_says_it_is_fitted_to_one_
     assert "SINGLE WINDOW" in tune.render(result)
 
 
-def test_a_builtin_agent_with_no_file_is_proposed_against_the_setting_never_dropped(home):
+def _builtin_windows(home, name):
     windows = four_windows([0, 0, 0, 0])
     for data in windows:
-        data["by_agent"] = [{"key": "general-purpose", "turns": 2624, "weighted": 208000000.0}]
+        data["by_agent"] = [{"key": name, "turns": 2624, "weighted": 208000000.0}]
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     (home / ".claude" / "settings.json").write_text(
         json.dumps({"env": {"CLAUDE_CODE_SUBAGENT_MODEL": "claude-opus-5"}}), encoding="utf-8"
     )
+    return windows
+
+
+def test_a_listed_builtin_agent_with_no_file_is_proposed_against_the_setting_never_dropped(home):
+    windows = _builtin_windows(home, "Explore")
     result = build(windows, home, setting=tune.subagent_model_setting(home))
-    entry = entry_for(result, "general-purpose")
+    entry = entry_for(result, "Explore")
     assert entry["status"] == tune.SETTING_PROPOSAL
     assert entry["typical_weighted"] == 208000000.0
     assert entry["files"] == []
@@ -328,12 +333,23 @@ def test_a_builtin_agent_with_no_file_is_proposed_against_the_setting_never_drop
     assert "208.0M" in tune.render(result)
 
 
+def test_an_ungated_builtin_agent_shows_its_cost_instead_of_a_setting_proposal(home):
+    windows = _builtin_windows(home, "general-purpose")
+    result = build(windows, home, setting=tune.subagent_model_setting(home))
+    entry = entry_for(result, "general-purpose")
+    assert entry["status"] == tune.NOT_ASSESSABLE
+    assert entry["weighted_saving"] is None
+    assert entry["typical_weighted"] == 208000000.0
+    assert "advice.sonnet_class_agents" in entry["note"]
+    assert result["setting_proposals"] == []
+
+
 def test_a_builtin_agent_below_the_saving_floor_still_reports_its_cost_with_no_proposal(home):
     windows = four_windows([0, 0, 0, 0])
     for data in windows:
-        data["by_agent"] = [{"key": "general-purpose", "turns": 3, "weighted": 260000.0}]
+        data["by_agent"] = [{"key": "Explore", "turns": 3, "weighted": 260000.0}]
     result = build(windows, home, setting=tune.subagent_model_setting(home))
-    entry = entry_for(result, "general-purpose")
+    entry = entry_for(result, "Explore")
     assert entry["status"] == tune.NO_FILE
     assert entry["typical_weighted"] == 260000.0
     assert entry["weighted_saving"] is None

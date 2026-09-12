@@ -444,6 +444,21 @@ def _builtin_entry(centre, window_data, config, settings_map, setting, buys):
         "the `model` argument on the Agent call that starts each run."
         % (SUBAGENT_MODEL_ENV, setting["path"], current)
     )
+    if centre["name"] not in set(advice._settings(config)["sonnet_class_agents"]):
+        return _entry(
+            centre,
+            NOT_ASSESSABLE,
+            buys=buys,
+            note="%s It is not listed in advice.sonnet_class_agents in config.json, so whether its work "
+            "survives a cheaper tier has not been judged, and the widest lever this tool can name is not "
+            "proposed for it. Cost shown without a saving on purpose." % lever,
+            performance_risk="unknown",
+            quality_risk="Cannot be assessed from spend data alone.",
+            setting_env=SUBAGENT_MODEL_ENV,
+            setting_path=setting["path"],
+            setting_value=setting["value"],
+            setting_readable=setting["readable"],
+        )
     if saving < settings_map["min_saving"] or centre["windows_present"] < settings_map["min_windows_for_proposal"]:
         return _entry(
             centre,
