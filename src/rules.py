@@ -63,8 +63,12 @@ def _tool_shares(record):
     tools = record["tools"]
     if not tools:
         return []
-    share = record["weighted"] / len(tools)
-    return [(tool, share) for tool in tools]
+    sizes = [tool.get("result_chars") for tool in tools]
+    if any(size is None for size in sizes) or sum(sizes) <= 0:
+        share = record["weighted"] / len(tools)
+        return [(tool, share) for tool in tools]
+    total = float(sum(sizes))
+    return [(tool, record["weighted"] * size / total) for tool, size in zip(tools, sizes)]
 
 
 def _finding(rule, subject, detail, weighted_cost, evidence):

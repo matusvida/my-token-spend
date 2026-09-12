@@ -278,9 +278,14 @@ never speculates; a rule either fires with a number or does not fire.
 | Subagent storm | Sidechain turn count and cost share per parent session | Total sidechain weighted cost for that session |
 | Agent-type skew | Weighted cost grouped by `attributionAgent` | Cost per agent type, ranked |
 | Model mismatch | Opus/Fable turns with one trivial tool call and short output | Difference between actual cost and the same turn priced at sonnet |
-| Redundant reads | Identical tool input hash re-read repeatedly within a session | Cost of the repeat occurrences |
-| Loop / retry burn | Repeated near-identical tool calls, failed-then-retried sequences | Cost of the redundant attempts |
+| Redundant reads | Identical tool input hash re-read repeatedly within a session | Cost of the repeat occurrences, each call charged its share of the turn by `result_chars` |
+| Loop / retry burn | Repeated near-identical tool calls, failed-then-retried sequences | Cost of the redundant attempts, charged the same way |
 | Whale turns | Top N single messages by weighted cost | The turn's own cost, labelled with the triggering user prompt |
+
+A turn's cost is split across its tool calls in proportion to `result_chars`, so
+a repeated 400 KB read carries its own weight and a repeated `ls` does not. When
+any call on the turn has no recorded result size, or every result was empty, the
+split falls back to an even one.
 
 Interface: `rules.evaluate(records, config) -> list[Finding]`. Depends on nothing
 but `config.json` thresholds — no I/O, so each rule is unit-testable against

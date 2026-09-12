@@ -362,3 +362,44 @@ def test_every_module_shares_one_model_family_implementation():
     assert advice.model_family is rules.model_family
     assert advice._model_family is rules.model_family
     assert tune._model_family is rules.model_family
+
+
+def with_results(record, sizes):
+    for tool, size in zip(record["tools"], sizes):
+        tool["result_chars"] = size
+    return record
+
+
+def repeat_cost(records, tool_name):
+    finding = [f for f in find(rules.evaluate(records, CONFIG), "redundant_reads") if f["evidence"]["tool"] == tool_name]
+    return finding[0]["weighted_cost"] if finding else 0.0
+
+
+def test_a_repeated_call_carries_the_share_of_its_own_result_size():
+    records = [
+        with_results(rec(at(i), output=1000, tools=[("Read", "h1"), ("Bash", "h2")]), [9000, 1000])
+        for i in range(4)
+    ]
+    big, small = repeat_cost(records, "Read"), repeat_cost(records, "Bash")
+    assert round(big / small, 6) == 9.0
+
+
+def test_calls_split_a_turn_evenly_when_no_result_size_was_recorded():
+    records = [rec(at(i), output=1000, tools=[("Read", "h1"), ("Bash", "h2")]) for i in range(4)]
+    assert repeat_cost(records, "Read") == repeat_cost(records, "Bash")
+
+
+def test_a_turn_with_one_unrecorded_result_falls_back_to_an_even_split():
+    records = [
+        with_results(rec(at(i), output=1000, tools=[("Read", "h1"), ("Bash", "h2")]), [9000, None])
+        for i in range(4)
+    ]
+    assert repeat_cost(records, "Read") == repeat_cost(records, "Bash")
+
+
+def test_a_turn_whose_results_were_all_empty_falls_back_to_an_even_split():
+    records = [
+        with_results(rec(at(i), output=1000, tools=[("Read", "h1"), ("Bash", "h2")]), [0, 0])
+        for i in range(4)
+    ]
+    assert repeat_cost(records, "Read") == repeat_cost(records, "Bash")
