@@ -94,6 +94,7 @@
       "frontend-reviewer",
       "Explore"
     ],
+    "opus_class_agents": [],
     "min_saving": 250000,
     "min_storms_for_median": 4,
     "min_whales_for_median": 4

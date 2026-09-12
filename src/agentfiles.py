@@ -1,5 +1,6 @@
 import difflib
 import json
+import re
 from pathlib import Path
 
 
@@ -203,3 +204,34 @@ def unified_patch(path, text, target, label):
             text.splitlines(keepends=True), updated, fromfile="a/" + label, tofile="b/" + label, n=1
         )
     )
+
+
+PARALLEL_CAP = re.compile(
+    r"(?i)\b(?:at most|no more than|max(?:imum)?(?: of)?|up to|limit(?:ed)? to)\s+"
+    r"\*{0,2}(\d+)\*{0,2}[^.\n]{0,40}?"
+    r"\b(?:in parallel|parallel|concurrent(?:ly)?|at (?:a|one) time|at once)\b"
+)
+
+
+def role_files(root):
+    directory = root["path"]
+    if not directory.is_dir():
+        return []
+    try:
+        return sorted(path for path in directory.glob("*.md") if path.is_file())
+    except OSError:
+        return []
+
+
+def parallel_cap(roots):
+    candidates = []
+    for root in roots:
+        candidates.extend(role_files(root))
+        candidates.extend(_candidate_files(root, AGENT_DIRS + SKILL_DIRS))
+    ordered = sorted(_dedupe(candidates), key=lambda path: 0 if "orchestrat" in path.stem.lower() else 1)
+    for path in ordered:
+        for line in _read(path).splitlines():
+            match = PARALLEL_CAP.search(line)
+            if match:
+                return {"path": path, "cap": int(match.group(1))}
+    return None

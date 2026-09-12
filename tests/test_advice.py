@@ -97,6 +97,7 @@ def test_every_rule_maps_to_exactly_one_class():
         "agent_type_skew",
         "context_bloat",
         "whale_turns",
+        "headroom",
     }
     assert advice.RULE_CLASS["model_mismatch"] == advice.WASTE
     assert advice.RULE_CLASS["subagent_storm"] == advice.STRATEGY

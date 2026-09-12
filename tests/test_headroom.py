@@ -256,3 +256,210 @@ def test_a_disabled_budget_is_not_reported_as_unused():
     start = datetime(2026, 8, 22, tzinfo=timezone.utc)
     samples = [{"ts": "2026-08-24T10:00:00+00:00", "extra_usage": {"is_enabled": False, "used_credits": 0}}]
     assert quota_module.extra_usage_unused(samples, start, start + timedelta(days=7)) is None
+
+
+import advice
+import agentfiles
+import pytest
+
+
+def agent_file(directory, name, model=None, description="does a thing"):
+    directory.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "name: %s" % name, 'description: "%s"' % description]
+    if model:
+        lines.append("model: %s" % model)
+    lines += ["---", "", "Body of %s." % name, ""]
+    path = directory / ("%s.md" % name)
+    path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    return path
+
+
+@pytest.fixture
+def home(tmp_path):
+    user = tmp_path / "user"
+    (user / ".claude" / "agents").mkdir(parents=True)
+    (user / ".claude" / "skills").mkdir(parents=True)
+    (user / ".claude" / "plugins").mkdir(parents=True)
+    return user
+
+
+def roots_for(home):
+    return agentfiles.default_roots(user_home=home, plugins_home=home / ".claude" / "plugins")
+
+
+def window_data(total=300000.0):
+    return {
+        "totals": {"weighted": total},
+        "by_model": [{"key": "claude-sonnet-5", "weighted": total}],
+        "by_repo": [],
+        "weights": {
+            "model_weights": CONFIG["model_weights"],
+            "default_model_weight": CONFIG["default_model_weight"],
+            "token_class_weights": CONFIG["token_class_weights"],
+        },
+    }
+
+
+def headroom_finding(components=(), serial=(), extra=None, unused=700000.0):
+    return {
+        "rule": "headroom",
+        "subject": "week_2026_08_22",
+        "detail": "quiet window",
+        "weighted_cost": unused,
+        "evidence": {
+            "method": "quota-fit",
+            "ceiling": 1000000.0,
+            "spent": 300000.0,
+            "percent_used": 30.0,
+            "previous_percent_used": 25.0,
+            "max_pct": 60,
+            "unused_weighted": unused,
+            "components": list(components),
+            "serial_sessions": list(serial),
+            "extra_usage": extra,
+        },
+    }
+
+
+def component(name, weighted=100000.0, kind="agent", turns=20):
+    return {
+        "component": kind,
+        "name": name,
+        "turns": turns,
+        "weighted": weighted,
+        "median_thinking": 4000,
+        "median_output": 2000,
+    }
+
+
+def advise(finding, home, total=300000.0):
+    return advice.recommend(window_data(total), [finding], CONFIG, roots=roots_for(home))
+
+
+def of_kind(items, kind):
+    return [item for item in items if item["kind"] == kind]
+
+
+def test_an_upgrade_names_the_file_it_would_change_and_prices_it_in_weighted_tokens(home):
+    path = agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    result = of_kind(advise(headroom_finding([component("deep-reviewer")]), home), "upgrade_tier")
+    assert len(result) == 1
+    assert str(path) in result[0]["evidence"]["file"]
+    assert result[0]["weighted_headroom"] == 400000.0
+    assert result[0]["group"] == advice.HEADROOM
+    assert "model: opus" in result[0]["action"]
+
+
+def test_an_upgrade_that_would_not_fit_in_the_unused_quota_is_not_offered(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    finding = headroom_finding([component("deep-reviewer", weighted=1000000.0)])
+    assert of_kind(advise(finding, home), "upgrade_tier") == []
+
+
+def test_an_agent_already_on_opus_is_not_offered_an_upgrade(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="opus")
+    assert of_kind(advise(headroom_finding([component("deep-reviewer")]), home), "upgrade_tier") == []
+
+
+def test_an_agent_with_no_definition_file_is_not_offered_an_upgrade(home):
+    assert of_kind(advise(headroom_finding([component("ghost")]), home), "upgrade_tier") == []
+
+
+def test_widening_a_fan_out_names_the_session_and_the_cap_it_found(home):
+    (home / ".claude" / "agent-role-orchestrator.md").write_text(
+        "# Role\n\n- Keep **at most 3 running in parallel** unless asked.\n", encoding="utf-8", newline="\n"
+    )
+    serial = [
+        {
+            "session": "serial-1",
+            "runs": 4,
+            "peak_live_runs": 1,
+            "minutes": 46.0,
+            "weighted": 200000.0,
+            "median_run_weighted": 50000.0,
+            "cwd": "C:\workspace\srst",
+        }
+    ]
+    result = of_kind(advise(headroom_finding(serial=serial), home), "widen_fan_out")
+    assert len(result) == 1
+    assert result[0]["subject"] == "serial-1"
+    assert "agent-role-orchestrator.md" in result[0]["detail"]
+    assert "3" in result[0]["detail"]
+    assert result[0]["weighted_headroom"] == 50000.0
+
+
+def test_widening_a_fan_out_says_so_when_no_cap_was_found(home):
+    serial = [
+        {
+            "session": "serial-1",
+            "runs": 4,
+            "peak_live_runs": 1,
+            "minutes": 46.0,
+            "weighted": 200000.0,
+            "median_run_weighted": 50000.0,
+            "cwd": "C:\workspace\srst",
+        }
+    ]
+    result = of_kind(advise(headroom_finding(serial=serial), home), "widen_fan_out")
+    assert "no parallel cap" in result[0]["detail"]
+
+
+def test_an_untouched_overage_budget_is_stated_once_with_no_action(home):
+    extra = {"is_enabled": True, "monthly_limit": 5000, "used_credits": 0, "currency": "USD", "decimal_places": 2}
+    result = of_kind(advise(headroom_finding(extra=extra), home), "extra_usage_unused")
+    assert len(result) == 1
+    assert result[0]["action"] == ""
+    assert "USD" in result[0]["detail"]
+
+
+def test_a_budget_that_was_used_produces_no_line(home):
+    extra = {"is_enabled": True, "monthly_limit": 5000, "used_credits": 40, "currency": "USD"}
+    assert of_kind(advise(headroom_finding(extra=extra), home), "extra_usage_unused") == []
+
+
+def test_no_headroom_recommendation_appears_without_a_headroom_finding(home):
+    assert advice.recommend(window_data(), [], CONFIG, roots=roots_for(home)) == []
+
+
+def test_every_headroom_recommendation_that_asks_for_work_names_a_file_or_a_session(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    (home / ".claude" / "agent-role-orchestrator.md").write_text(
+        "- at most 3 in parallel\n", encoding="utf-8", newline="\n"
+    )
+    serial = [
+        {
+            "session": "serial-1",
+            "runs": 4,
+            "peak_live_runs": 1,
+            "minutes": 46.0,
+            "weighted": 200000.0,
+            "median_run_weighted": 50000.0,
+            "cwd": "C:\workspace\srst",
+        }
+    ]
+    extra = {"is_enabled": True, "monthly_limit": 5000, "used_credits": 0, "currency": "USD"}
+    items = [
+        item
+        for item in advise(headroom_finding([component("deep-reviewer")], serial, extra), home)
+        if item["group"] == advice.HEADROOM
+    ]
+    assert len(items) == 3
+    for item in items:
+        if not item["action"]:
+            continue
+        assert item["evidence"].get("file") or item["evidence"].get("session")
+
+
+def test_no_headroom_recommendation_tells_the_reader_to_spend_the_remainder(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    extra = {"is_enabled": True, "monthly_limit": 5000, "used_credits": 0, "currency": "USD"}
+    for item in advise(headroom_finding([component("deep-reviewer")], extra=extra), home):
+        text = " ".join([item["title"], item["action"], item["detail"]]).lower()
+        assert "use more tokens" not in text
+        assert "spend the remaining quota" not in text
+
+
+def test_a_headroom_card_is_never_presented_as_a_saving(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    for item in of_kind(advise(headroom_finding([component("deep-reviewer")]), home), "upgrade_tier"):
+        assert item["weighted_saving"] == 0.0
