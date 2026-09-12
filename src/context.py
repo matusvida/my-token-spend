@@ -70,6 +70,7 @@ def summarize_session(session, config):
 
     by_tool = defaultdict(float)
     counted = defaultdict(int)
+    largest = {}
     prompt_growth = 0.0
     unattributed = 0.0
     results = []
@@ -87,7 +88,11 @@ def summarize_session(session, config):
                     unattributed += share
                 else:
                     by_tool[name] += share
-                    counted[name] += 1
+            for entry in attributed:
+                counted[entry["tool"]] += 1
+                best = largest.get(entry["tool"])
+                if best is None or entry["chars"] > best["chars"]:
+                    largest[entry["tool"]] = {"chars": entry["chars"], "ts": entry["ts"]}
             results.extend(attributed)
             leader = max(buckets, key=buckets.get) if buckets else None
             series.append([record["ts"], _usage(record), round(growth), leader])
@@ -119,6 +124,7 @@ def summarize_session(session, config):
         "unattributed_growth": unattributed,
         "attributed_share": (attributed_growth / total_growth) if total_growth else 0.0,
         "top_results": sorted(results, key=lambda entry: (-entry["chars"], entry["ts"]))[:TOP_RESULTS],
+        "largest_by_tool": largest,
         "compactions": sum(1 for record in session if _is_reset(record)),
         "compaction_ts": [record["ts"] for record in ordered if _is_reset(record)],
         "carry_tax": carry_tax,
@@ -140,10 +146,18 @@ def _downsample(series, limit):
     if len(series) <= limit:
         return series
     stride = len(series) / float(limit)
-    kept = [series[min(len(series) - 1, int(i * stride))] for i in range(limit)]
-    if kept[-1] is not series[-1]:
-        kept.append(series[-1])
-    return kept
+    binned = []
+    for index in range(limit):
+        bucket = series[int(index * stride) : int((index + 1) * stride)] or []
+        if not bucket:
+            continue
+        weights = defaultdict(float)
+        for point in bucket:
+            if point[3]:
+                weights[point[3]] += point[2]
+        leader = max(weights, key=weights.get) if weights else None
+        binned.append([bucket[-1][0], bucket[-1][1], sum(point[2] for point in bucket), leader])
+    return binned
 
 
 def _size(chars):
@@ -168,17 +182,15 @@ def detail(summary, threshold, config):
     )
     leader = summary["growth_by_tool"][0] if summary["growth_by_tool"] else None
     if leader and summary["growth_total"]:
-        largest = next(
-            (entry for entry in summary["top_results"] if entry["tool"] == leader["tool"]), None
-        )
+        biggest = summary["largest_by_tool"].get(leader["tool"])
         text += "; %.0f%% of the context growth came from %d %s result%s" % (
             100.0 * leader["tokens"] / summary["growth_total"],
             leader["results"],
             leader["tool"],
             "" if leader["results"] == 1 else "s",
         )
-        if largest:
-            text += ", the largest %s at %s" % (_size(largest["chars"]), _clock(largest["ts"], config))
+        if biggest:
+            text += ", the largest %s at %s" % (_size(biggest["chars"]), _clock(biggest["ts"], config))
     coverage = summary["tool_results_coverage"]
     if coverage["total"] and coverage["present"] < coverage["total"]:
         missing = coverage["total"] - coverage["present"]

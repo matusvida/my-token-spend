@@ -312,8 +312,8 @@ divide by.
 
 Per session it reports growth by tool name, the ten largest single results with
 their tool and timestamp, the number of compactions, the carry tax (the weighted
-`cache_read` above the threshold, unchanged from the old rule), and the share of
-tool calls that carry a `result_chars` at all. Old records carry none, so every
+`cache_read` above the threshold), and the share of tool calls that carry a
+`result_chars` at all. Old records carry none, so every
 sentence built from this data states that coverage.
 
 Interface: `context.summarize_session(session, config)`,
@@ -633,10 +633,11 @@ context          context.window_block output: the context-growth breakdown the
                    prompt_growth, unattributed_growth, attributed_share,
                    top_results[{tool, chars, ts, growth}], compactions,
                    carry_tax, excess_tokens, peak_cache_read, first_ts, last_ts,
-                   cwd, tool_results_coverage, compaction_ts[],
-                   series[[ts, context, growth, tool]]}]}
-                 series is downsampled to 300 points; compaction_ts carries the
-                 markers so they survive the thinning
+                   cwd, tool_results_coverage, largest_by_tool{},
+                   compaction_ts[], series[[ts, context, growth, tool]]}]}
+                 series is binned down to 300 points - each bin sums its growth,
+                 so the bars still add up to growth_total - and compaction_ts
+                 carries the markers so they survive the binning
                  only sessions that carry a context_bloat finding, the ten
                  heaviest by carry tax
 

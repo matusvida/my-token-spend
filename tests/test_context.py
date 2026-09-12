@@ -285,3 +285,32 @@ def test_compaction_timestamps_are_kept_for_the_chart_markers():
         rec(at(1), cache_read=20000, after_compaction=True),
     ]
     assert growth_of(session)["compaction_ts"] == [at(1)]
+
+
+def test_parallel_calls_on_one_turn_each_count_as_a_result():
+    session = [
+        rec(at(0), cache_read=10000, tools=[tool("Bash", 100), tool("Bash", 300)]),
+        rec(at(1), cache_read=30000),
+    ]
+    entry = growth_of(session)["growth_by_tool"][0]
+    assert (entry["tool"], entry["results"]) == ("Bash", 2)
+
+
+def test_detail_names_the_largest_result_of_the_leading_tool_even_outside_the_top_ten():
+    tools = [tool("Bash", 4000)] + [tool("Read", 20000 + i) for i in range(11)]
+    session = [
+        rec(at(2), cache_read=THRESHOLD + 1000, tools=tools),
+        rec(at(3), cache_read=THRESHOLD + 900000),
+    ]
+    summary = growth_of(session, UTC_CONFIG)
+    summary["growth_by_tool"] = [entry for entry in summary["growth_by_tool"] if entry["tool"] == "Bash"]
+    assert "Bash" not in [entry["tool"] for entry in summary["top_results"]]
+    assert "the largest 4 KB at 14:02" in context.detail(summary, THRESHOLD, UTC_CONFIG)
+
+
+def test_downsampling_keeps_every_token_of_growth():
+    session = [rec(at(0), cache_read=1000 * i, tools=[tool("Bash", 10)]) for i in range(1200)]
+    for i, record in enumerate(session):
+        record["ts"] = "2026-08-25T14:00:%06.3f+00:00" % (i * 0.001)
+    summary = growth_of(session)
+    assert sum(point[2] for point in summary["series"]) == summary["growth_total"]
