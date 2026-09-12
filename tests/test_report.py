@@ -1672,3 +1672,47 @@ def test_the_run_timeline_marks_day_boundaries_when_it_spans_days():
     assert charts.timeline_mode(chart) == "clock"
     svg = charts.svg_run_timeline(chart)
     assert svg.count('class="grid day"') == 2
+
+
+def test_the_scatter_draws_the_minority_model_last():
+    import charts
+
+    points = [{"tools": 1, "output": 100, "thinking": 10, "model": "claude-opus-5"} for _ in range(5)]
+    points.append({"tools": 1, "output": 900, "thinking": 700, "model": "claude-sonnet-5"})
+    points.append({"tools": 1, "output": 120, "thinking": 20, "model": "claude-opus-5"})
+    chart = {
+        "kind": "scatter",
+        "points": points,
+        "models": ["claude-opus-5", "claude-sonnet-5"],
+        "box": {"output": 250, "tools": 1, "thinking": 200},
+        "axis_max": 1000,
+        "thinking_max": 800,
+        "above_axis": 0,
+        "plotted": len(points),
+        "total": len(points),
+    }
+    svg = charts.svg_scatter(chart)
+    assert svg.index("claude-sonnet-5\n") > svg.rindex("claude-opus-5\n")
+
+
+def test_the_scatter_region_edges_sit_exactly_on_the_thresholds():
+    import charts
+
+    chart = {
+        "kind": "scatter",
+        "points": [{"tools": 1, "output": 250, "thinking": 200, "model": "claude-opus-5"}],
+        "models": ["claude-opus-5"],
+        "box": {"output": 250, "tools": 1, "thinking": 200},
+        "axis_max": 1000,
+        "thinking_max": 800,
+        "above_axis": 0,
+        "plotted": 1,
+        "total": 1,
+    }
+    svg = charts.svg_scatter(chart)
+    region = re.search(r'<rect class="region" x="([0-9.]+)" y="([0-9.]+)" width="([0-9.]+)" height="([0-9.]+)"', svg)
+    dot = re.search(r'<circle class="dot" cx="([0-9.]+)" cy="([0-9.]+)"', svg)
+    assert abs(float(region.group(1)) + float(region.group(3)) - float(dot.group(1))) < 0.01
+    assert abs(float(region.group(2)) - float(dot.group(2))) < 0.01
+    assert abs(float(region.group(2)) + float(region.group(4)) - (320 - charts.MARGIN["bottom"])) < 0.01
+    assert float(region.group(1)) == charts.MARGIN["left"]

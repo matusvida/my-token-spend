@@ -696,7 +696,8 @@ def svg_scatter(chart, height=320):
             ),
         )
     )
-    for point in points:
+    frequency = Counter(point["model"] for point in points)
+    for point in sorted(points, key=lambda item: -frequency[item["model"]]):
         parts.append(
             '<circle class="dot" cx="%.2f" cy="%.2f" r="4" fill="var(%s)" data-tip="%s"/>'
             % (
