@@ -1379,3 +1379,31 @@ def test_a_timeline_whose_runs_are_all_slivers_falls_back_to_runs_by_turns():
     html = report._timeline_chart_html(chart)
     assert "Runs by turns, largest first" in html
     assert "too short to place on the clock" in html
+
+
+def test_a_legend_names_only_the_token_classes_the_bars_actually_draw():
+    import evidence
+
+    chart = {
+        "kind": "whale_bars",
+        "series": list(evidence.WHALE_SERIES),
+        "rows": [
+            {"label": "05:40", "model": "claude-opus-5", "agent": "main agent", "weighted": 100.0,
+             "parts": [0.0, 100.0, 0.0, 0.0]}
+        ],
+    }
+    html = report._whale_chart_html(chart)
+    assert "context written to cache" in html
+    assert "context re-read from cache" not in html
+    assert "fresh input" not in html
+
+
+def test_a_timeline_whose_runs_are_all_named_shows_no_derived_swatch():
+    chart = _timeline(minutes=50, span_days=0)
+    html = report._timeline_chart_html(chart)
+    assert "label derived from tools" not in html
+    assert "named by the orchestrator" not in html
+    chart["runs"][0]["named"] = False
+    both = report._timeline_chart_html(chart)
+    assert "label derived from tools" in both
+    assert "named by the orchestrator" in both

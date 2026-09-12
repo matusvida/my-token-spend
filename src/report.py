@@ -1399,9 +1399,15 @@ def _actions_section(recommendations, anchors, config):
     return '<section class="card"><h2>Do these first</h2>%s%s</section>' % (cards, OVERLAP_NOTICE)
 
 
-def _legend_of(names):
+def _legend_of(names, present=None):
     colours = charts.color_map(names)
-    return legend([{"name": name, "color": colours[name]} for name in names])
+    shown = [name for name in names if present is None or name in present]
+    return legend([{"name": name, "color": colours[name]} for name in shown]) if shown else ""
+
+
+def _marked_legend(entries):
+    shown = [{"name": name, "color": colour} for name, colour, present in entries if present]
+    return legend(shown) if len(shown) > 1 else ""
 
 
 def _context_chart_html(chart):
@@ -1415,7 +1421,7 @@ def _context_chart_html(chart):
         for entry in chart["by_tool"]
     ]
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
-        _legend_of(names),
+        _legend_of(names, {point[3] for point in chart["series"] if point[1] > 0}),
         svg_context_series(chart),
         esc(note),
         table_view(["tool", "context tokens it grew", "results"], rows, "Numbers"),
@@ -1438,8 +1444,12 @@ def _timeline_chart_html(chart):
         for run in chart["runs"]
     ]
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
-        legend([{"name": "named by the orchestrator", "color": "--series-1"},
-                {"name": "label derived from tools", "color": charts.OTHER}]),
+        _marked_legend(
+            [
+                ("named by the orchestrator", "--series-1", any(run["named"] for run in chart["runs"])),
+                ("label derived from tools", charts.OTHER, any(not run["named"] for run in chart["runs"])),
+            ]
+        ),
         svg_run_timeline(chart),
         esc(note),
         table_view(["run", "agent type", "from", "to", "turns", "weighted"], rows, "Numbers"),
@@ -1454,7 +1464,7 @@ def _scatter_chart_html(chart):
     if chart.get("above_axis"):
         note += " %s above the axis not drawn." % _plural(chart["above_axis"], "turn")
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>" % (
-        _legend_of(chart["models"]),
+        _legend_of(chart["models"], {point["model"] for point in chart["points"]}),
         svg_scatter(chart),
         esc(note),
     )
@@ -1494,17 +1504,21 @@ def _cluster_chart_html(chart):
 
 
 def _whale_chart_html(chart):
-    series = [
-        {"name": name, "color": charts.CATEGORICAL[index]} for index, name in enumerate(chart["series"])
+    drawn = [
+        index
+        for index, _ in enumerate(chart["series"])
+        if any(row["parts"][index] > 0 for row in chart["rows"])
     ]
+    names = [chart["series"][index] for index in drawn]
+    series = [{"name": name, "color": charts.CATEGORICAL[index]} for index, name in enumerate(names)]
     categories = [
         {
             "label": row["label"],
             "sublabel": None,
-            "parts": row["parts"],
+            "parts": [row["parts"][index] for index in drawn],
             "tips": [
-                "%s at %s\n%s: %s weighted" % (row["model"], row["label"], name, exact(value))
-                for name, value in zip(chart["series"], row["parts"])
+                "%s at %s\n%s: %s weighted" % (row["model"], row["label"], name, exact(row["parts"][index]))
+                for name, index in zip(names, drawn)
             ],
         }
         for row in chart["rows"]
@@ -1679,14 +1693,13 @@ def _round_trip_card(card):
     )
 
 
-DERIVED_LEGEND = (
-    {"name": "named by the orchestrator", "color": "--series-1"},
-    {"name": "label derived from tools", "color": charts.OTHER},
-)
-
-
 def _lane_block(lane, total):
-    marks = legend(list(DERIVED_LEGEND)) if any(row.get("derived") for row in lane["rows"]) else ""
+    marks = _marked_legend(
+        [
+            ("named by the orchestrator", "--series-1", any(not row.get("derived") for row in lane["rows"])),
+            ("label derived from tools", charts.OTHER, any(row.get("derived") for row in lane["rows"])),
+        ]
+    )
     rows = [
         {
             "label": charts.clip_label(row["label"], 38, row.get("derived")),
