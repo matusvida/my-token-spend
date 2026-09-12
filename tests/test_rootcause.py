@@ -523,6 +523,34 @@ def test_the_teammate_envelope_around_a_prompt_does_not_break_the_join():
     assert run["description"] == "Implement section 2"
 
 
+def test_a_stored_prompt_shorter_than_the_prompt_head_still_joins():
+    calls = _calls(_dispatch("toolu_1", "Implement section 2"))
+    run = rootcause.group_runs(_dispatched_records([("r0", PROMPT_A[:50])]), agent_calls=calls)[0]
+    assert run["description"] == "Implement section 2"
+
+
+def test_a_stored_prompt_longer_than_the_prompt_head_still_joins():
+    calls = _calls(_dispatch("toolu_1", "Implement section 2", prompt=PROMPT_A[:50]))
+    run = rootcause.group_runs(_dispatched_records([("r0", PROMPT_A)]), agent_calls=calls)[0]
+    assert run["description"] == "Implement section 2"
+
+
+def test_the_teammate_envelope_eating_the_label_budget_does_not_break_the_join():
+    envelope = '<teammate-message teammate_id="team-lead" summary="rescan">\n'
+    long_prompt = PROMPT_A + " " + "and keep going until every window is accounted for" * 4
+    limit = 160
+    calls = _calls(_dispatch("toolu_1", "Implement section 2", prompt=long_prompt[:limit]))
+    stored = (envelope + long_prompt)[:limit]
+    run = rootcause.group_runs(_dispatched_records([("r0", stored)]), agent_calls=calls)[0]
+    assert run["description"] == "Implement section 2"
+
+
+def test_two_different_prompts_sharing_no_long_prefix_do_not_join():
+    calls = _calls(_dispatch("toolu_1", "Implement section 2"))
+    run = rootcause.group_runs(_dispatched_records([("r0", PROMPT_B)]), agent_calls=calls)[0]
+    assert run["description"] is None
+
+
 def test_a_prompt_too_short_to_identify_a_job_joins_nothing():
     calls = _calls(_dispatch("toolu_1", "Implement section 2", prompt="go"))
     run = rootcause.group_runs(_dispatched_records([("r0", "go")]), agent_calls=calls)[0]

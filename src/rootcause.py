@@ -201,9 +201,18 @@ DISPATCH_KEY_CHARS = 200
 DISPATCH_KEY_MIN = 40
 
 
+def _dispatch_text(prompt):
+    return " ".join(TEAMMATE_TAG.sub("", str(prompt or "")).split())[:DISPATCH_KEY_CHARS]
+
+
 def _dispatch_key(session, prompt):
-    text = " ".join(TEAMMATE_TAG.sub("", str(prompt or "")).split())[:DISPATCH_KEY_CHARS]
-    return (session, text) if len(text) >= DISPATCH_KEY_MIN else None
+    text = _dispatch_text(prompt)
+    return (session, text[:DISPATCH_KEY_MIN]) if len(text) >= DISPATCH_KEY_MIN else None
+
+
+def _same_dispatch(left, right):
+    shared = min(len(left), len(right))
+    return shared >= DISPATCH_KEY_MIN and left[:shared] == right[:shared]
 
 
 def dispatch_index(agent_calls):
@@ -219,7 +228,12 @@ def dispatch_index(agent_calls):
 
 def _dispatch_of(turns, index):
     key = _dispatch_key(turns[0].get("sessionId"), turns[0].get("prompt"))
-    candidates = index.get(key) if key else None
+    text = _dispatch_text(turns[0].get("prompt"))
+    candidates = [
+        call
+        for call in (index.get(key) or [])
+        if _same_dispatch(text, _dispatch_text(call.get("prompt_head")))
+    ] if key else None
     if not candidates:
         return {}
     earlier = [call for call in candidates if (call.get("ts") or "") <= turns[0]["ts"]]
