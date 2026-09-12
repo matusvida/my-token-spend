@@ -82,7 +82,7 @@ path. `python src/cli.py` from a clone works too, if you know your own interpret
 
 | Subcommand | Useful flags |
 |---|---|
-| `collect` | `--backfill` re-read every transcript · `--recut-windows` re-bucket the stored records after the window boundary moves · `--reprice` re-price the stored records after a `model_weights` change · `--rebuild-from-transcripts-only` (destructive) · `--window YYYY-MM-DD` |
+| `collect` | `--rescan` re-read every transcript and fold the fields it carries into the stored records · `--backfill` re-read every transcript · `--recut-windows` re-bucket the stored records after the window boundary moves · `--reprice` re-price the stored records after a `model_weights` change · `--rebuild-from-transcripts-only` (destructive) · `--window YYYY-MM-DD` |
 | `report` | `--no-narrative` skip the Claude call · `--all` rebuild every page · `--refresh-narrative` |
 | `status` | `--set-reset-weekday DAY` |
 | `quota` | none |
@@ -208,6 +208,36 @@ included. A run that would shrink a closed window refuses and names exactly what
 still contain. `--reprice` is the one other store-only path: it rewrites each record's weighted
 cost from the raw token counts it already holds, so it can never drop one. Nothing prunes the
 store; back it up if you back up anything.
+
+## Upgrading an existing store
+
+A plain `collect` reads only the bytes each transcript has grown by since the last run. When a
+release adds a field to the stored records, that field therefore lands on the turns collected after
+the upgrade and on no others, and the agent-call and list-price stores it feeds stay as thin as
+whatever has been appended since. The first `collect` after such a release says so and names the
+fix:
+
+```
+NEW FIELDS AVAILABLE: this store predates schema version 2, so the records collected before
+the upgrade carry none of its fields; fold them in once with: collect --rescan
+```
+
+`collect --rescan` re-reads every transcript still on disk from its first byte and folds what it
+finds into the records already stored, matched by `uuid`. A record gains the fields it was missing.
+A record whose transcript has since been pruned is left exactly as it is. The weighted totals do
+not move, because the price already stored on each record is kept - add `--reprice` if you also
+want the current `model_weights` applied. Agent calls and session costs are merged by their own
+keys, so running it twice changes nothing the second time. It prints what it folded in:
+
+```
+rescan records      : 51794 gained fields, 265 added, 1940 already complete
+rescan agent calls  : 612 added
+rescan session costs: 33 added
+```
+
+Run `report --all` afterwards to rebuild the pages from the fuller store. Do not reach for
+`--rebuild-from-transcripts-only` to do this: it throws away every record whose transcript is gone,
+which on a store of any age is most of it.
 
 ## Scheduling
 

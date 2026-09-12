@@ -136,6 +136,25 @@ Both were enforced by tests when they were written, in the same suite that is no
     they were derived from tools because the stored prompt was too short. A line that cannot be
     grounded in the records is omitted, never softened into a guess.
 
+### Added with the rescan upgrade path
+
+22. **`collect --rescan` backfills fields and can neither lose a record nor move a total.** A plain
+    collect reads only the bytes past each stored offset, so after a schema change the fields it
+    added exist only on the records parsed since. `--rescan` re-reads every transcript from byte
+    zero and **upserts** into the store by `uuid`: a record that already exists keeps its identity
+    and gains whatever fields the fresh parse carries, a record whose transcript was pruned is left
+    untouched, and the priced fields `weighted` and `model_known` are carried over from the stored
+    copy unless `--reprice` is given alongside. It merges rather than replaces per tool call too,
+    so an outcome already joined onto a stored call is never overwritten with a null. The agent-call
+    and cost-state stores are merged by their own keys under the same no-shrink rule, and
+    `state.json` offsets are reset to each file's new end. It is the upgrade path
+    `--rebuild-from-transcripts-only` must never be used for: that flag discards the store, and on a
+    real install most of the history is no longer in any transcript.
+23. **The rescan recommendation is stated once.** `state.json` carries the `schema_version` the
+    store was last written under. When a collect finds a store that predates the current version, it
+    names `--rescan` on stderr and records the new version, so the notice does not repeat. A first
+    collect into an empty store says nothing.
+
 This one is still enforced by an executable test upstream: every root-cause builder is run over
 synthetic records and the assertion fails if any produced line contains a blame word. The test
 lives in the unshipped suite (see [Testing](#testing)), so here too the prose is the shipped guard.
@@ -258,8 +277,8 @@ idempotent: running three times a day, or twice in a minute, converges on the
 same file.
 
 Interface: `collect.run(...)` and `collect.recut(...)`, reached from the CLI as
-`collect [--backfill] [--recut-windows] [--reprice] [--rebuild-from-transcripts-only]
-[--window YYYY-MM-DD]`.
+`collect [--backfill] [--rescan] [--recut-windows] [--reprice]
+[--rebuild-from-transcripts-only] [--window YYYY-MM-DD]`.
 Depends on `config.json`, `state.json`, `rules.py`, `context.py`, `cost.py`.
 
 Window boundaries are evaluated in the zone named by `config.timezone`. A `null` value — the shipped
@@ -413,14 +432,18 @@ and the turn count behind the repeat. A builder that cannot ground its line in t
 
 **Clustering key.** Runs are grouped by `agentId` (skills by `sessionId`, since a skill has no
 invocation id). A run is joined to the `Agent` call that dispatched it on the dispatch prompt: the
-session id plus the first 200 characters of the run's first stored prompt, whitespace-collapsed and
+session id plus the first 40 characters of the run's first stored prompt, whitespace-collapsed and
 stripped of a leading `<teammate-message>` envelope, matched against the same normalisation of the
-call's `prompt_head`. Nothing on a subagent turn carries the dispatching call's id, so the prompt is
+call's `prompt_head` and then confirmed over whatever prefix both sides actually carry. The two
+texts are cut to different lengths — both start at `prompt_label_chars`, but the envelope is
+stripped from only the stored side, and a run whose prompt arrived wrapped therefore keeps fewer
+characters of it — so the confirmation compares `min(len)` characters rather than demanding equal
+strings. Nothing on a subagent turn carries the dispatching call's id, so the prompt is
 the only link the transcripts offer; a prompt shorter than 40 normalised characters is not specific
 enough to join on and joins nothing. When one prompt was dispatched more than once in a session, the
 latest call at or before the run's first turn wins, which is the retry rather than the original. The
 join gives the run the description the orchestrator wrote, the model it asked for and the size of
-the prompt it was given. Measured here: 90 of 123 runs in `week_2026_09_05`. Runs that carry a description cluster on the description alone; the rest
+the prompt it was given. Measured here: 98 of 123 runs in `week_2026_09_05`. Runs that carry a description cluster on the description alone; the rest
 cluster on **tool mix, working directory, branch and agent type** — the fields every turn carries in
 full. `prompt` is deliberately *not* a clustering input: it is stored
 truncated at `prompt_label_chars` and often begins with skill boilerplate. It is used only as a
@@ -822,7 +845,11 @@ store. It is the durable source of truth, not the transcripts: Claude Code prune
 `~/.claude/projects/**/*.jsonl` over time, so a window's history is no longer
 re-derivable once its transcripts are gone. Every run unions freshly parsed
 records into the store by `uuid`; `--backfill` re-reads every transcript but
-still only unions. A run that would shrink a closed window refuses and names the
+still only unions. `--rescan` also re-reads every transcript from byte zero, and
+merges field by field into each stored record instead of replacing it, so a
+record collected under an older schema gains the fields it was missing while its
+`weighted` stays exactly as priced. That makes it the upgrade path after a schema
+change. A run that would shrink a closed window refuses and names the
 loss; `--rebuild-from-transcripts-only` is the explicit opt-in that discards the
 store. Re-cutting windows after a reset-weekday change is `--recut-windows`,
 which re-buckets the store and never touches transcripts. Re-pricing after a
@@ -861,8 +888,8 @@ stores the call with `result_chars`, `is_error` and `denied` all null and hands
 the unmatched result to the next pass, which fills it into the stored record.
 A null outcome therefore means *not yet known*, never *succeeded*: every figure
 derived from outcomes states the share of calls that carry one. Records written
-before this field existed carry none, and stay unresolved until a
-`--rebuild-from-transcripts-only` re-reads the transcripts that are still there.
+before this field existed carry none, and stay unresolved until `--rescan`
+re-reads the transcripts that are still there.
 
 `data/records/agent_calls_week_YYYY_MM_DD.jsonl` holds one line per `Agent` tool
 call, keyed by `tool_use_id`: `{tool_use_id, ts, sessionId, parent_uuid,
@@ -874,9 +901,11 @@ so a subagent whose turns land in the window after its dispatch still joins.
 
 `state.json` maps absolute transcript path to
 `{offset, size, mtime, last_prompt, malformed, source_tool_use_id,
-pending_compaction}`. A file is skipped when size and mtime are both unchanged,
-resumed from `offset` when it has strictly grown, and re-read from byte zero
-otherwise. A trailing line without a newline is left unconsumed until it is
+pending_compaction}` under `files`, and carries the `schema_version` the store
+was last written under alongside it. A file is skipped when size and mtime are
+both unchanged, resumed from `offset` when it has strictly grown, and re-read
+from byte zero otherwise; `--rescan` re-reads every file whatever its offset says
+and leaves the offsets at each file's new end. A trailing line without a newline is left unconsumed until it is
 complete.
 
 ## The advice engine
