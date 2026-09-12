@@ -1468,7 +1468,7 @@ def _cluster_chart_html(chart):
         {
             "label": clip(row["label"], 28),
             "value": row["weighted"],
-            "color": charts.OTHER if row["confidence"] == "residual" else "--series-1",
+            "color": charts.OTHER if row["confidence"] == "residual" or row["derived"] else "--series-1",
             "tip": "%s\n%s weighted\n%s, %s"
             % (row["label"], exact(row["weighted"]), _plural(row["runs"], "run"), row["confidence"]),
         }
@@ -1674,11 +1674,19 @@ def _round_trip_card(card):
     )
 
 
+DERIVED_LEGEND = (
+    {"name": "named by the orchestrator", "color": "--series-1"},
+    {"name": "label derived from tools", "color": charts.OTHER},
+)
+
+
 def _lane_block(lane, total):
+    marks = legend(list(DERIVED_LEGEND)) if any(row.get("derived") for row in lane["rows"]) else ""
     rows = [
         {
             "label": clip(row["label"], 38),
             "value": row["weighted"],
+            "color": charts.OTHER if row.get("derived") else "--series-1",
             "tip": "%s\n%s weighted (%s of the window)"
             % (row["label"], exact(row["weighted"]), percent(100.0 * row["weighted"] / total) if total else "-"),
         }
@@ -1689,8 +1697,9 @@ def _lane_block(lane, total):
             esc(lane["name"]),
             esc("Nothing in this window records it. %s" % lane["note"]),
         )
-    return '<div class="lane"><h3>%s</h3><div class="chart-wrap">%s</div><p class="chart-note">%s</p>%s</div>' % (
+    return '<div class="lane"><h3>%s</h3>%s<div class="chart-wrap">%s</div><p class="chart-note">%s</p>%s</div>' % (
         esc(lane["name"]),
+        marks,
         svg_ranked_bars(rows, label_width=320),
         esc(lane["note"] + "."),
         table_view(

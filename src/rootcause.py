@@ -346,14 +346,66 @@ def _confidence(members, agreement, mixed, tool_share, label_source):
     return "low"
 
 
-TAIL = "not clustered"
+TAIL = "agent and repo only"
 
 
 def tail_note(clusters):
-    tail = clusters[-1] if clusters else None
-    if not tail or tail.get("confidence") != TAIL:
+    tail = [cluster for cluster in clusters if cluster.get("tail")]
+    if not tail:
         return None
-    return "the last bar holds %s" % _plural(tail["runs"], "run")
+    return "%s outside the named jobs, grouped by agent type and repo" % _plural(
+        sum(cluster["runs"] for cluster in tail), "run"
+    )
+
+
+def _tail_group(key, members):
+    agent, repo = key
+    runs = sum(cluster["runs"] for cluster in members)
+    tools = Counter()
+    for cluster in members:
+        tools.update(cluster["tools"])
+    turns = sum(cluster["turns"] for cluster in members)
+    tool_turns = sum(cluster["tool_turns"] for cluster in members)
+    return {
+        "key": key,
+        "agent": agent,
+        "repo": repo,
+        "branch": "mixed branches",
+        "dominant": None,
+        "writes": False,
+        "mcp": [],
+        "label": "%s more %s %s in %s" % (runs, agent, "run" if runs == 1 else "runs", repo),
+        "label_source": "derived",
+        "runs": runs,
+        "described_runs": sum(cluster["described_runs"] for cluster in members),
+        "turns": turns,
+        "median_turns": float(median([cluster["median_turns"] for cluster in members])),
+        "weighted": sum(cluster["weighted"] for cluster in members),
+        "minutes": sum(cluster["minutes"] for cluster in members),
+        "tools": tools,
+        "tool_turns": tool_turns,
+        "tool_share": (tool_turns / turns) if turns else 0.0,
+        "agreement": 0.0,
+        "mixed": False,
+        "confidence": TAIL,
+        "tail": True,
+        "members": [],
+        "other_labels": [],
+    }
+
+
+def _group_tail(tail):
+    grouped = defaultdict(list)
+    for cluster in tail:
+        grouped[(cluster["agent"], cluster["repo"])].append(cluster)
+    rows = []
+    for key, members in grouped.items():
+        if len(members) == 1:
+            rows.append(dict(members[0], tail=True))
+            continue
+        rows.append(_tail_group(key, members))
+    rows.sort(key=lambda cluster: (-cluster["weighted"], cluster["label"]))
+    return rows
 
 
 def cluster_runs(runs, max_clusters=12):
@@ -403,43 +455,17 @@ def cluster_runs(runs, max_clusters=12):
                     (tool_turns / turns) if turns else 0.0,
                     label_source if named else ("prompt" if usable else "derived"),
                 ),
+                "tail": False,
                 "members": members,
                 "other_labels": [run["label"] for run in members[1:4]],
             }
         )
     clusters.sort(key=lambda cluster: (-cluster["weighted"], cluster["label"]))
-    if len(clusters) <= max_clusters:
-        return clusters
-    head = clusters[:max_clusters]
-    tail = clusters[max_clusters:]
-    head.append(
-        {
-            "key": None,
-            "agent": None,
-            "repo": None,
-            "branch": None,
-            "dominant": None,
-            "writes": False,
-            "mcp": [],
-            "label": "%d smaller job clusters" % len(tail),
-            "label_source": "derived",
-            "runs": sum(cluster["runs"] for cluster in tail),
-            "described_runs": sum(cluster["described_runs"] for cluster in tail),
-            "turns": sum(cluster["turns"] for cluster in tail),
-            "median_turns": 0.0,
-            "weighted": sum(cluster["weighted"] for cluster in tail),
-            "minutes": sum(cluster["minutes"] for cluster in tail),
-            "tools": Counter(),
-            "tool_turns": sum(cluster["tool_turns"] for cluster in tail),
-            "tool_share": 0.0,
-            "agreement": 0.0,
-            "mixed": True,
-            "confidence": TAIL,
-            "members": [],
-            "other_labels": [],
-        }
-    )
-    return head
+    named = [cluster for cluster in clusters if cluster["label_source"] != "derived"]
+    head = named[:max_clusters]
+    kept = {id(cluster) for cluster in head}
+    tail = [cluster for cluster in clusters if id(cluster) not in kept]
+    return head + _group_tail(tail)
 
 
 def overlap(runs):

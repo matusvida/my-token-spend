@@ -228,10 +228,20 @@ def test_the_cost_centres_rank_six_lanes_and_state_their_coverage():
     window, records, calls = real_shaped()
     html = rendered(window, records, calls)
     centres = html.split("<h2>Cost centres</h2>")[1].split("<h2>Raw breakdowns</h2>")[0]
-    for lane in ("Jobs, by the description", "MCP servers", "Plugins", "Skills", "Repos", "Models"):
+    for lane in (
+        "Jobs, by dispatch description where recovered",
+        "MCP servers",
+        "Plugins",
+        "Skills",
+        "Repos",
+        "Models",
+    ):
         assert lane in centres
     assert "descriptions recovered for" in centres
     assert centres.count("recorded on") >= 5
+    assert "smaller job clusters" not in centres
+    assert "more general-purpose runs in" in centres
+    assert "label derived from tools" in centres
 
 
 def test_the_top_finding_names_a_job_by_its_description():

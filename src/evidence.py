@@ -5,6 +5,7 @@ SCATTER_POINTS = 400
 TIMELINE_RUNS = 6
 TABLE_ROWS = 4
 LANE_ROWS = 3
+JOBS_TAIL_ROWS = 6
 
 RULE_GROUPS = {"context_bloat": 1, "subagent_storm": 1, "agent_type_skew": 1}
 ROUND_TRIPS = "round_trips"
@@ -153,7 +154,8 @@ def _skew_chart(records, finding, config, agent_calls):
             "weighted": cluster["weighted"],
             "runs": cluster["runs"],
             "confidence": cluster["confidence"],
-            "tail": cluster["confidence"] == rootcause.TAIL,
+            "derived": cluster["label_source"] == "derived",
+            "tail": cluster["tail"],
         }
         for cluster in clusters
     ]
@@ -165,6 +167,7 @@ def _skew_chart(records, finding, config, agent_calls):
                 "weighted": residual,
                 "runs": 0,
                 "confidence": "residual",
+                "derived": True,
                 "tail": False,
             }
         )
@@ -331,15 +334,25 @@ def lanes(window, records, config, agent_calls=None):
     runs = rootcause.group_runs(records, agent_calls=agent_calls)
     clusters = rootcause.cluster_runs(runs, max_clusters=rootcause.settings(config)["max_clusters"])
     tail = rootcause.tail_note(clusters)
+    named = [cluster for cluster in clusters if not cluster["tail"]]
+    grouped = [cluster for cluster in clusters if cluster["tail"]]
+    shown = named + grouped[:JOBS_TAIL_ROWS]
+    note = rootcause.description_note_of(rootcause.description_coverage(runs)) + ("; " + tail if tail else "")
+    if len(grouped) > JOBS_TAIL_ROWS:
+        note += ", %d groups not drawn" % (len(grouped) - JOBS_TAIL_ROWS)
     built = [
         {
-            "name": "Jobs, by the description that dispatched them",
+            "name": "Jobs, by dispatch description where recovered",
             "rows": [
-                {"label": cluster["label"], "weighted": cluster["weighted"], "turns": cluster["turns"]}
-                for cluster in clusters
+                {
+                    "label": cluster["label"],
+                    "weighted": cluster["weighted"],
+                    "turns": cluster["turns"],
+                    "derived": cluster["label_source"] == "derived",
+                }
+                for cluster in shown
             ],
-            "note": rootcause.description_note_of(rootcause.description_coverage(runs))
-            + ("; " + tail if tail else ""),
+            "note": note,
         }
     ]
     for name, entries, note in (

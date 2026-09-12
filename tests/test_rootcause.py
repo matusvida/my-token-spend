@@ -613,13 +613,31 @@ def test_the_default_cluster_cap_keeps_twelve_named_jobs():
     assert rootcause.settings({})["max_clusters"] == 12
 
 
-def test_clusters_beyond_the_cap_collapse_into_a_tail_that_counts_its_runs():
+def test_clusters_beyond_the_cap_group_by_agent_type_and_repo():
     clusters = rootcause.cluster_runs(_described_runs(20), max_clusters=12)
     assert len(clusters) == 13
+    assert all(not cluster["tail"] for cluster in clusters[:12])
     tail = clusters[-1]
     assert tail["runs"] == 8
-    assert tail["confidence"] == "not clustered"
-    assert rootcause.tail_note(clusters) == "the last bar holds 8 runs"
+    assert tail["tail"] is True
+    assert tail["confidence"] == "agent and repo only"
+    assert tail["label"] == "8 more general-purpose runs in srst"
+    assert (
+        rootcause.tail_note(clusters)
+        == "8 runs outside the named jobs, grouped by agent type and repo"
+    )
+
+
+def test_a_derived_label_never_outranks_a_named_job():
+    runs = _described_runs(3)
+    for run in runs[:1]:
+        run["description"] = None
+        run["label"] = "no prompt captured"
+        run["weighted"] = 10 ** 9
+    clusters = rootcause.cluster_runs(runs, max_clusters=12)
+    assert clusters[0]["label_source"] == "description"
+    assert clusters[-1]["label_source"] == "derived"
+    assert clusters[-1]["tail"] is True
 
 
 def test_a_cluster_list_that_fits_the_cap_has_no_tail_note():
