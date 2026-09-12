@@ -1921,3 +1921,14 @@ def test_a_lone_mismatched_turn_is_not_reported_in_the_plural():
     detail = rules.model_mismatch(records, config)[0]["detail"]
     assert detail.startswith("1 claude-opus-5 turn produced")
     assert "it would have cost" in detail
+
+
+def test_identical_labels_are_not_eaten_by_their_own_shared_affixes():
+    import charts
+
+    labels = ["# Multi-Expert MR Review Design reference: specs/mr-review"] * 3
+    assert charts.shorten_labels(labels, 40) == [charts.clip(labels[0], 40)] * 3
+    stamps = ["2026-08-22T1%d:09:00+00:00" % index for index in range(3)]
+    assert charts.distinct_labels(labels, 40, stamps) == [
+        charts.clip(labels[0], 40) + " 1%d:09" % index for index in range(3)
+    ]

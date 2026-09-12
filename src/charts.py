@@ -39,7 +39,7 @@ def _shared_suffix(labels):
 
 
 def shorten_labels(labels, limit):
-    if len(labels) < 2:
+    if len(set(labels)) < 2:
         return [clip(label, limit) for label in labels]
     prefix = _shared_prefix(labels)
     if len(prefix) < MIN_AFFIX or any(len(label) - len(prefix) < MIN_REMAINDER for label in labels):
