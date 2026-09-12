@@ -1645,6 +1645,8 @@ def test_a_timeline_whose_median_run_is_a_sliver_falls_back_to_runs_by_turns():
     assert svg.index("the overnight run") < svg.index("short job 4")
     html = report._timeline_chart_html(chart)
     assert "most runs are too thin to place on the clock" in html
+    runs[5]["last_ts"] = "2026-09-05T21:43:00+00:00"
+    assert charts.timeline_mode(chart) == "clock"
 
 
 def test_the_run_timeline_marks_day_boundaries_when_it_spans_days():

@@ -516,7 +516,7 @@ def svg_context_series(chart, height=280):
 
 MIN_BAR = 3.0
 
-MIN_MEDIAN_BAR = 6.0
+MIN_MEDIAN_BAR = 12.0
 
 DAY_SECONDS = 86400.0
 
