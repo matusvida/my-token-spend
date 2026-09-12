@@ -572,7 +572,7 @@ def svg_scatter(chart, height=320):
     return _svg(height, "".join(parts))
 
 
-def svg_burn(labels, cumulative, ceiling, reset_label, height=300):
+def svg_burn(labels, cumulative, ceiling, reset_label, ceiling_label="ceiling", height=300):
     left, top, width, plot_height = _plot_box(height)
     ticks = nice_ticks(max(cumulative + [ceiling or 0.0, 1.0]))
     top_tick = ticks[-1]
@@ -592,8 +592,8 @@ def svg_burn(labels, cumulative, ceiling, reset_label, height=300):
             % (left, y, PLOT_WIDTH - MARGIN["right"], y)
         )
         parts.append(
-            '<text class="reference-label" x="%.2f" y="%.2f" text-anchor="end">quota %s</text>'
-            % (PLOT_WIDTH - MARGIN["right"] - 12, y - 8, esc(compact(ceiling)))
+            '<text class="reference-label" x="%.2f" y="%.2f" text-anchor="end">%s %s</text>'
+            % (PLOT_WIDTH - MARGIN["right"] - 12, y - 8, esc(ceiling_label), esc(compact(ceiling)))
         )
     coordinates = " ".join("%.2f,%.2f" % (x_at(index), y_at(value)) for index, value in enumerate(cumulative))
     parts.append('<polyline class="line" points="%s" stroke="var(--series-1)"/>' % coordinates)

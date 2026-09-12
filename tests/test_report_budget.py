@@ -269,3 +269,14 @@ def test_the_headroom_group_renders_only_when_a_headroom_recommendation_exists()
     with_headroom = rendered(window, records, calls, recommendations=[item])
     assert "Headroom - quota you did not use" in with_headroom
     assert "Upgrade the review agents" in with_headroom
+
+
+def test_the_burn_reference_line_is_named_by_the_ceiling_method():
+    window, records, calls = real_shaped()
+    measured = rendered(window, records, calls)
+    assert ">quota 2.5B<" in measured
+    assert "estimated ceiling 2.5B" not in measured
+    window["ceiling"]["method"] = "top-cluster"
+    estimated = rendered(window, records, calls)
+    assert "estimated ceiling 2.5B" in estimated
+    assert ">quota 2.5B<" not in estimated

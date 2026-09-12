@@ -1267,6 +1267,7 @@ def _burn_chart(window):
         cumulative,
         window["ceiling"].get("estimate"),
         reset_label(window),
+        "quota" if collect.quota_is_known(window["ceiling"]) else "estimated ceiling",
     )
 
 

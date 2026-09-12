@@ -991,7 +991,7 @@ def test_the_verdict_carries_four_tiles_and_the_burn_line():
     assert "$12.50" in verdict
     assert "not what the subscription bills" in verdict
     assert "Unattributed subagent spend" in verdict
-    assert "quota 10.0K" in verdict
+    assert "estimated ceiling 10.0K" in verdict
     assert "reset 2026-08-29" in verdict
 
 
