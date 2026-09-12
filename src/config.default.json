@@ -1,0 +1,108 @@
+{
+  "transcript_root": "~/.claude/projects",
+  "timezone": null,
+  "reset_weekday": "Saturday",
+  "reset_hour": 0,
+  "token_class_weights": {
+    "input": 1.0,
+    "cache_create": 1.25,
+    "cache_read": 0.1,
+    "output": 5.0
+  },
+  "model_weights": {
+    "claude-opus-5": 5.0,
+    "claude-opus-4-8": 5.0,
+    "claude-fable-5": 5.0,
+    "claude-sonnet-5": 1.0,
+    "claude-haiku-4-5-20251001": 0.33,
+    "<synthetic>": 0.0
+  },
+  "default_model_weight": 1.0,
+  "ceiling": {
+    "override": null,
+    "top_cluster_fraction": 0.25,
+    "min_windows": 3,
+    "headroom": 1.05
+  },
+  "prompt_label_chars": 400,
+  "narrative_model": "sonnet",
+  "rootcause": {
+    "min_centre_share": 0.03,
+    "max_centres": 6,
+    "max_clusters": 8,
+    "max_findings": 12,
+    "label_chars": 90
+  },
+  "thresholds": {
+    "context_bloat": {
+      "cache_read_per_turn": 150000,
+      "min_turns": 12
+    },
+    "subagent_storm": {
+      "min_sidechain_turns": 25,
+      "min_cost_share": 0.35
+    },
+    "agent_type_skew": {
+      "top_n": 5,
+      "min_weighted": 250000
+    },
+    "model_mismatch": {
+      "downgrade_model": "claude-sonnet-5",
+      "max_output_tokens": 250,
+      "max_tool_calls": 1,
+      "min_total_weighted": 100000
+    },
+    "redundant_reads": {
+      "min_repeats": 3,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebFetch"
+      ]
+    },
+    "loop_retry": {
+      "min_repeats": 3
+    },
+    "whale_turns": {
+      "top_n": 10
+    }
+  },
+  "advice": {
+    "sonnet_class_agents": [
+      "review-verifier",
+      "mr-scout",
+      "test-reviewer",
+      "db-reviewer",
+      "api-contract-reviewer",
+      "security-reviewer",
+      "backend-reviewer",
+      "frontend-reviewer",
+      "Explore"
+    ],
+    "min_saving": 250000,
+    "min_storms_for_median": 4,
+    "min_whales_for_median": 4
+  },
+  "tune": {
+    "builtin_agents": [
+      "general-purpose",
+      "Explore",
+      "Plan",
+      "claude",
+      "statusline-setup",
+      "output-style-setup"
+    ],
+    "cheap_model_families": [
+      "sonnet",
+      "haiku"
+    ],
+    "min_saving": 250000,
+    "min_cost": 250000,
+    "windows": 4,
+    "min_windows_for_proposal": 2
+  },
+  "reset_weekday_confirmed": false,
+  "reset_weekday_source": "default"
+}

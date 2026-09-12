@@ -1,0 +1,180 @@
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+import collect
+
+CONFIG = json.loads((Path(__file__).resolve().parents[1] / "src" / "config.default.json").read_text())
+
+
+def assistant_line(uuid, ts, output=1000, session="s1", model="claude-sonnet-5"):
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "timestamp": ts,
+            "sessionId": session,
+            "isSidechain": False,
+            "effort": "high",
+            "cwd": "C:\\workspace\\srst",
+            "gitBranch": "master",
+            "version": "2.1.227",
+            "message": {
+                "model": model,
+                "content": [],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": output,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+            },
+        }
+    )
+
+
+@pytest.fixture
+def workspace(tmp_path):
+    root = tmp_path / "projects" / "proj"
+    root.mkdir(parents=True)
+    out = tmp_path / "out"
+    out.mkdir()
+    return {"root": tmp_path / "projects", "out": out, "state": out / "state.json", "proj": root}
+
+
+def run(workspace, **kwargs):
+    return collect.run(
+        config=CONFIG,
+        root=workspace["root"],
+        out_dir=workspace["out"],
+        state_path=workspace["state"],
+        **kwargs,
+    )
+
+
+def test_run_writes_the_window_json_and_markdown(workspace):
+    (workspace["proj"] / "a.jsonl").write_text(assistant_line("u1", "2026-08-25T10:00:00Z") + "\n", encoding="utf-8")
+    run(workspace)
+    assert (workspace["out"] / "data" / "week_2026_08_22.json").exists()
+    assert (workspace["out"] / "reports" / "week_2026_08_22.md").exists()
+
+
+def test_a_session_straddling_the_reset_is_split_across_two_windows(workspace):
+    lines = [
+        assistant_line("u1", "2026-08-28T20:00:00Z", output=100),
+        assistant_line("u2", "2026-08-28T23:30:00Z", output=200),
+        assistant_line("u3", "2026-08-29T09:00:00Z", output=300),
+    ]
+    (workspace["proj"] / "a.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    run(workspace)
+    old = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    new = json.loads((workspace["out"] / "data" / "week_2026_08_29.json").read_text())
+    assert old["totals"]["turns"] == 1 and old["totals"]["output"] == 100
+    assert new["totals"]["turns"] == 2 and new["totals"]["output"] == 500
+
+
+def test_a_run_over_an_empty_corpus_fails_loudly(workspace):
+    with pytest.raises(collect.CollectionError):
+        run(workspace)
+
+
+def test_a_run_over_transcripts_without_usage_fails_loudly(workspace):
+    (workspace["proj"] / "a.jsonl").write_text(json.dumps({"type": "system", "x": 1}) + "\n", encoding="utf-8")
+    with pytest.raises(collect.CollectionError):
+        run(workspace)
+
+
+def test_repeated_runs_converge_on_the_same_window_file(workspace):
+    (workspace["proj"] / "a.jsonl").write_text(assistant_line("u1", "2026-08-25T10:00:00Z") + "\n", encoding="utf-8")
+    run(workspace)
+    first = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    run(workspace)
+    second = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    first["generated_at"] = second["generated_at"] = None
+    first["window"] = second["window"] = None
+    first["ceiling"] = second["ceiling"] = None
+    assert first == second
+
+
+def test_an_incremental_second_run_still_reports_the_full_window(workspace):
+    path = workspace["proj"] / "a.jsonl"
+    path.write_text(assistant_line("u1", "2026-08-25T10:00:00Z") + "\n", encoding="utf-8")
+    run(workspace)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(assistant_line("u2", "2026-08-26T10:00:00Z") + "\n")
+    run(workspace)
+    window = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    assert window["totals"]["turns"] == 2
+
+
+def test_re_reading_a_rotated_file_does_not_double_count(workspace):
+    path = workspace["proj"] / "a.jsonl"
+    path.write_text(assistant_line("u1", "2026-08-25T10:00:00Z") + "\n", encoding="utf-8")
+    run(workspace)
+    run(workspace, backfill=True)
+    window = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    assert window["totals"]["turns"] == 1
+
+
+def test_state_is_persisted_between_runs(workspace):
+    (workspace["proj"] / "a.jsonl").write_text(assistant_line("u1", "2026-08-25T10:00:00Z") + "\n", encoding="utf-8")
+    run(workspace)
+    state = json.loads(workspace["state"].read_text())
+    assert list(state["files"].values())[0]["offset"] > 0
+
+
+def test_window_filter_writes_only_the_requested_window(workspace):
+    lines = [
+        assistant_line("u1", "2026-08-25T10:00:00Z"),
+        assistant_line("u2", "2026-08-30T10:00:00Z"),
+    ]
+    (workspace["proj"] / "a.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    run(workspace, window="2026-08-29")
+    assert (workspace["out"] / "data" / "week_2026_08_29.json").exists()
+    assert not (workspace["out"] / "data" / "week_2026_08_22.json").exists()
+
+
+def test_malformed_lines_are_counted_in_the_window(workspace):
+    lines = [assistant_line("u1", "2026-08-25T10:00:00Z"), "{broken", assistant_line("u2", "2026-08-25T11:00:00Z")]
+    (workspace["proj"] / "a.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    run(workspace)
+    window = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    assert window["parse"]["malformed_lines"] == 1
+    assert window["totals"]["turns"] == 2
+
+
+def test_ceiling_is_calibrated_across_all_windows(workspace):
+    lines = [
+        assistant_line("u1", "2026-08-01T10:00:00Z", output=1000),
+        assistant_line("u2", "2026-08-09T10:00:00Z", output=5000),
+        assistant_line("u3", "2026-08-16T10:00:00Z", output=9000),
+        assistant_line("u4", "2026-08-25T10:00:00Z", output=100),
+    ]
+    (workspace["proj"] / "a.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    run(workspace)
+    window = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    assert window["ceiling"]["method"] == "top-cluster"
+    assert window["ceiling"]["estimate"] > 0
+
+
+def test_markdown_names_the_window_and_its_findings(workspace):
+    lines = [assistant_line("u%d" % i, "2026-08-25T10:%02d:00Z" % i, output=50000) for i in range(12)]
+    (workspace["proj"] / "a.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    run(workspace)
+    text = (workspace["out"] / "reports" / "week_2026_08_22.md").read_text(encoding="utf-8")
+    assert "week_2026_08_22" in text
+    assert "whale_turns" in text
+    assert "estimate" in text.lower()
+
+
+def test_subdirectories_of_the_transcript_root_are_walked(workspace):
+    nested = workspace["proj"] / "session" / "subagents"
+    nested.mkdir(parents=True)
+    (nested / "agent.jsonl").write_text(assistant_line("u1", "2026-08-25T10:00:00Z") + "\n", encoding="utf-8")
+    run(workspace)
+    window = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    assert window["totals"]["turns"] == 1

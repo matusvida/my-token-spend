@@ -1,0 +1,22 @@
+#!/bin/sh
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cli="$root/src/cli.py"
+
+if [ -n "$MY_TOKEN_SPEND_PYTHON" ]; then
+  exec "$MY_TOKEN_SPEND_PYTHON" "$cli" "$@"
+fi
+
+for name in python3 python py; do
+  found=$(command -v "$name" 2>/dev/null) || continue
+  case "$found" in
+    *WindowsApps*) continue ;;
+  esac
+  if [ "$name" = py ]; then
+    exec "$found" -3 "$cli" "$@"
+  fi
+  exec "$found" "$cli" "$@"
+done
+
+echo "my-token-spend: no usable python interpreter found on PATH (tried python3, python, py)." >&2
+echo "Install Python 3.11+ or set MY_TOKEN_SPEND_PYTHON to its absolute path." >&2
+exit 1

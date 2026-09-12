@@ -1,0 +1,8 @@
+{
+  "name": "my-token-spend",
+  "description": "Reports your own Claude Code token spend against the real weekly reset window, attributes it to sessions, repos, models and subagents, and says what to change.",
+  "version": "1.5.1",
+  "author": {
+    "name": "Rohlik - CTI"
+  }
+}
