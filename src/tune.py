@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import advice
+import collect
 import paths
 import rules
 
@@ -993,6 +994,9 @@ def build(
         ],
         "ceiling": ceiling,
         "ceiling_method": (latest.get("ceiling") or {}).get("method"),
+        "ceiling_detail": {
+            key: (latest.get("ceiling") or {}).get(key) for key in ("samples_used", "band_pct")
+        },
         "pacing": [pacing(data, records_by_window.get(data["window"]["key"]) or [], ceiling, settings_map) for data in windows],
         "current": current_pacing(
             current, records_by_window.get((current or {}).get("window", {}).get("key")) or [], ceiling, settings_map, now
@@ -1078,14 +1082,13 @@ def _bar(fraction, width=24):
 def _render_pacing(result, lines):
     ceiling = result["ceiling"]
     lines.append("1. PACING AND EXHAUSTION")
-    lines.append(
-        "   ceiling estimate %s weighted (%s) - inferred from this machine's own history, not from Anthropic."
-        % (_num(ceiling), result["ceiling_method"])
-    )
+    block = {"method": result["ceiling_method"], **(result.get("ceiling_detail") or {})}
+    phrase = collect.ceiling_phrase(block)
+    lines.append("   ceiling %s weighted - %s." % (_num(ceiling), phrase))
     for window in result["pacing"]:
         lines.append("")
         lines.append(
-            "   %s  %s weighted  %s of the estimated ceiling%s"
+            "   %s  %s weighted  %s of the ceiling%s"
             % (
                 window["key"],
                 _short(window["total_weighted"]),
@@ -1121,16 +1124,16 @@ def _render_pacing(result, lines):
         )
         if window["exhausted_on"]:
             lines.append(
-                "     reached the estimated ceiling on day %d (%s)"
+                "     reached the ceiling on day %d (%s)"
                 % (window["exhausted_on_day"], window["exhausted_on"])
             )
         elif window["approached_on"]:
             lines.append(
-                "     came within 10%% of the estimated ceiling on day %d (%s)"
+                "     came within 10%% of the ceiling on day %d (%s)"
                 % (window["approached_on_day"], window["approached_on"])
             )
         else:
-            lines.append("     never approached the estimated ceiling")
+            lines.append("     never approached the ceiling")
         drivers = window.get("drivers") or {}
         for lane in ("repo", "agent", "skill"):
             items = drivers.get(lane) or []
@@ -1151,7 +1154,7 @@ def _render_pacing(result, lines):
         return
     lines.append("   CURRENT WINDOW %s" % current["key"])
     lines.append(
-        "     %.1f days elapsed, %.1f left. %s weighted so far, %s of the estimated ceiling."
+        "     %.1f days elapsed, %.1f left. %s weighted so far, %s of the ceiling."
         % (
             current["elapsed_days"],
             current["remaining_days"],

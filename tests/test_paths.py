@@ -41,7 +41,6 @@ def test_ensure_home_creates_every_directory_and_seeds_the_config(monkeypatch, t
     assert (home / "reports").is_dir()
     assert (home / "logs").is_dir()
     seeded = json.loads(paths.config_path(home).read_text(encoding="utf-8"))
-    assert seeded["reset_weekday_confirmed"] is False
     assert seeded["reset_weekday"] in (
         "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
     )
@@ -64,4 +63,4 @@ def test_nothing_resolves_inside_the_plugin_install_directory(monkeypatch, tmp_p
 def test_effective_config_falls_back_to_the_shipped_default(monkeypatch, tmp_path):
     monkeypatch.setenv("MY_TOKEN_SPEND_DATA", str(tmp_path / "empty"))
     assert paths.effective_config_path() == paths.DEFAULT_CONFIG
-    assert paths.load_config()["reset_weekday_confirmed"] is False
+    assert paths.load_config()["reset_weekday"] == "Saturday"

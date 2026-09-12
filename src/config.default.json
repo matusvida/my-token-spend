@@ -22,7 +22,13 @@
     "override": null,
     "top_cluster_fraction": 0.25,
     "min_windows": 3,
-    "headroom": 1.05
+    "headroom": 1.05,
+    "quota_fit": {
+      "min_pct": 10,
+      "min_samples": 3,
+      "windows": 3,
+      "fresh_hours": 6
+    }
   },
   "prompt_label_chars": 400,
   "narrative_model": "sonnet",
@@ -102,7 +108,5 @@
     "min_cost": 250000,
     "windows": 4,
     "min_windows_for_proposal": 2
-  },
-  "reset_weekday_confirmed": false,
-  "reset_weekday_source": "default"
+  }
 }

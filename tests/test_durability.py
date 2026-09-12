@@ -228,17 +228,6 @@ def test_changing_the_reset_weekday_advises_the_safe_re_cut(home, capsys):
     assert "--backfill" not in out
 
 
-def test_a_corrected_detection_advises_the_safe_re_cut(home):
-    config = cli.load_config(home)
-    config["reset_weekday"] = "Saturday"
-    cli.save_config(home, config)
-    note = cli.apply_detection(
-        home, cli.load_config(home), {"candidates": ["Thursday"], "detected": "Thursday", "ambiguous": False}
-    )
-    assert "collect --recut-windows" in note
-    assert "--backfill" not in note
-
-
 def test_recut_windows_cannot_be_combined_with_a_transcript_re_read(home, capsys):
     assert cli.main(["collect", "--recut-windows", "--backfill"]) == 1
     assert "cannot be combined" in capsys.readouterr().err

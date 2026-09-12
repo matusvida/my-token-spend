@@ -27,9 +27,10 @@ definition files on disk, `install-schedule` emits the OS scheduler definitions.
   PowerShell is available, use
   `powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/bin/my-token-spend.ps1"`.
   Keep `"${CLAUDE_PLUGIN_ROOT}"` quoted; the path can contain spaces.
-- **The reset weekday is a guess until the user confirms it.** Every command prints
-  `RESET DAY NOT CONFIRMED` while it is unconfirmed. Ask the user, then run
-  `status --set-reset-weekday <Day>`, then `collect --recut-windows` if it says the weekday changed.
+- **Windows are cut at the reset instant Anthropic reports**, sampled once per collect. If a run
+  prints `WINDOW BOUNDARY CHANGED`, run `collect --recut-windows` to re-slice the stored records.
+  `quota sample skipped` means the endpoint or the token was unavailable; the run still finished and
+  the cut fell back to the configured weekday.
 - **`data/records/` is the durable history, not the transcripts.** Claude Code prunes transcripts, so
   never run `collect --rebuild-from-transcripts-only`; it drops every record whose transcript is gone.
 - `UNKNOWN MODEL` means a model id matched nothing in `model_weights` and was priced at the default
@@ -41,8 +42,10 @@ definition files on disk, `install-schedule` emits the OS scheduler definitions.
   figures and risk levels. Leaving a number out is a missing answer, not privacy.
 - **Costs are in a weighted unit, not raw tokens.** Cache reads are ~0.1x, output ~5x, and models
   differ up to 5x. Do not compare a weighted figure to a raw token count from anywhere else.
-- **The ceiling is inferred from the user's own history, not from Anthropic.** Present percentages
-  as estimates.
+- **Check which ceiling method the report names.** `quota-fit` and `override` are a real quota, so
+  the percentage is a percentage of the quota. `top-cluster` is inferred from the user's own heavy
+  weeks, so present it as an estimate of their own habit, never as a limit. `quota` prints the
+  latest sample and the method.
 - **`tune` proposes; it never applies.** It prints a patch per file-level proposal and changes
   nothing. Do not apply one for the user unless they ask for that file to be changed, and never edit
   an agent definition, a skill or a CLAUDE.md as a side effect of running it.

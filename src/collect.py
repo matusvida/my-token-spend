@@ -1,7 +1,7 @@
 import hashlib
 import json
 import math
-import re
+import statistics
 import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone, tzinfo
@@ -10,59 +10,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import context
+import quota
 import rules
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-RESET_SIGNAL_HINTS = (
-    "weekly limit",
-    "usage limit",
-    "rate limit",
-    "limit reached",
-    "limit resets",
-    "limit will reset",
-    "reached your limit",
-    "out of usage",
-)
-
-_DAY = r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
-
-RESET_WEEKDAY_PATTERNS = [
-    r"resets?\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    r"reset(?:s|ting)?\s+at\s+[^.,;]{0,40}?\bon\s+" + _DAY,
-    r"will\s+reset\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    r"available\s+again\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    r"try\s+again\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    r"resumes?\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    _DAY + r"\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|:00)?",
-]
-
-
-def reset_weekday_candidates(text):
-    lowered = (text or "").lower()
-    if not any(hint in lowered for hint in RESET_SIGNAL_HINTS):
-        return set()
-    found = set()
-    for pattern in RESET_WEEKDAY_PATTERNS:
-        for match in re.finditer(pattern, lowered):
-            found.add(match.group(1).capitalize())
-    return found
-
-
-def resolve_reset_weekday(candidates):
-    unique = {c for c in candidates if c in WEEKDAYS}
-    return unique.pop() if len(unique) == 1 else None
-
-
-def _entry_text(entry):
-    parts = []
-    for source in (entry.get("content"), entry.get("summary"), (entry.get("message") or {}).get("content")):
-        if isinstance(source, str):
-            parts.append(source)
-        elif isinstance(source, list):
-            parts.extend(b.get("text") or "" for b in source if isinstance(b, dict) and b.get("type") == "text")
-    return "\n".join(p for p in parts if p)
-
 
 STANDARD_OFFSET = timedelta(seconds=-time.timezone)
 DAYLIGHT_OFFSET = timedelta(seconds=-time.altzone) if time.daylight else STANDARD_OFFSET
@@ -101,7 +52,10 @@ def parse_ts(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def window_start(dt_utc, config):
+def window_start(dt_utc, config, instants=None):
+    instant = quota.window_instant(dt_utc, instants)
+    if instant is not None:
+        return instant.astimezone(zone(config)).date()
     local = dt_utc.astimezone(zone(config))
     shifted = local - timedelta(hours=config["reset_hour"])
     days_back = (shifted.weekday() - WEEKDAYS.index(config["reset_weekday"])) % 7
@@ -112,10 +66,21 @@ def window_key(start_date):
     return "week_" + start_date.strftime("%Y_%m_%d")
 
 
-def bucket_records(records, config):
+def window_bounds(start_date, config, instants=None):
+    tz = zone(config)
+    if instants:
+        probe = datetime.combine(start_date, time_of_day(23, 59, 59), tzinfo=tz).astimezone(timezone.utc)
+        instant = quota.window_instant(probe, instants)
+        if instant is not None and instant.astimezone(tz).date() == start_date:
+            return instant, quota.window_end(instant, instants), "quota-sample"
+    start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=tz)
+    return start_local.astimezone(timezone.utc), (start_local + timedelta(days=7)).astimezone(timezone.utc), "config"
+
+
+def bucket_records(records, config, instants=None):
     buckets = defaultdict(list)
     for record in records:
-        buckets[window_start(parse_ts(record["ts"]), config).isoformat()].append(record)
+        buckets[window_start(parse_ts(record["ts"]), config, instants).isoformat()].append(record)
     return dict(buckets)
 
 
@@ -289,7 +254,6 @@ def read_file(path, config, stored):
             "records": [],
             "state": dict(stored),
             "malformed": 0,
-            "reset_candidates": [],
             "pending_results": {},
             "agent_calls": [],
         }
@@ -314,7 +278,6 @@ def read_file(path, config, stored):
 
     records = []
     malformed = 0
-    reset_candidates = set()
     awaiting = {}
     pending_results = {}
     calls = []
@@ -333,8 +296,6 @@ def read_file(path, config, stored):
         if not isinstance(entry, dict):
             malformed += 1
             continue
-        if "limit" in text.lower():
-            reset_candidates |= reset_weekday_candidates(_entry_text(entry))
         if entry.get("type") == "user":
             prompt = _prompt_text(entry, limit)
             if prompt:
@@ -377,13 +338,84 @@ def read_file(path, config, stored):
             "pending_compaction": after_compaction,
         },
         "malformed": malformed,
-        "reset_candidates": sorted(reset_candidates),
         "pending_results": pending_results,
         "agent_calls": calls,
     }
 
 
-def estimate_ceiling(window_totals, config):
+QUOTA_FIT_DEFAULTS = {"min_pct": 10, "min_samples": 3, "windows": 3, "fresh_hours": 6}
+
+
+def quota_fit(samples, config, instants=None, now=None):
+    settings = dict(QUOTA_FIT_DEFAULTS, **(config["ceiling"].get("quota_fit") or {}))
+    now = now or datetime.now(timezone.utc)
+    instants = quota.reset_instants(samples) if instants is None else instants
+    current = window_start(now, config, instants)
+    usable = []
+    for sample in samples:
+        pct, weighted = sample.get("seven_day_pct"), sample.get("weighted_so_far")
+        if pct is None or weighted is None or pct < settings["min_pct"] or weighted <= 0:
+            continue
+        start = window_start(parse_ts(sample["ts"]), config, instants)
+        if start <= current:
+            usable.append((start, pct / 100.0, float(weighted)))
+    wanted = sorted({start for start, _, _ in usable})[-settings["windows"]:]
+    points = [(fraction, weighted) for start, fraction, weighted in usable if start in wanted]
+    denominator = sum(fraction * fraction for fraction, _ in points)
+    if len(points) < settings["min_samples"] or denominator <= 0:
+        return None
+    estimate = sum(fraction * weighted for fraction, weighted in points) / denominator
+    implied = [weighted / fraction for fraction, weighted in points]
+    spread = statistics.pstdev(implied) if len(implied) > 1 else 0.0
+    latest = quota.latest_sample(samples)
+    age = quota.sample_age_hours(latest, now)
+    return {
+        "estimate": estimate,
+        "method": "quota-fit",
+        "approximate": True,
+        "cluster_size": 0,
+        "windows_considered": len(wanted),
+        "samples_used": len(points),
+        "band_pct": round(100.0 * spread / estimate, 1) if estimate else None,
+        "latest_pct": (latest or {}).get("seven_day_pct"),
+        "latest_pct_is_fresh": age is not None and age < settings["fresh_hours"],
+    }
+
+
+def ceiling_method_text(ceiling):
+    method = (ceiling or {}).get("method")
+    if method == "quota-fit":
+        band = ceiling.get("band_pct")
+        return "fitted from %d usage samples%s" % (
+            ceiling.get("samples_used") or 0,
+            "" if band is None else ", +/-%.0f%%" % band,
+        )
+    if method == "override":
+        return "the ceiling set in your config"
+    if method == "top-cluster":
+        return "estimated ceiling, from your own heavy weeks"
+    if method == "insufficient-data":
+        return "no ceiling yet, too few windows collected"
+    return "ceiling method unknown"
+
+
+def quota_is_known(ceiling):
+    return (ceiling or {}).get("method") in ("quota-fit", "override")
+
+
+def ceiling_noun(ceiling):
+    return "your weekly quota" if quota_is_known(ceiling) else "an estimated ceiling"
+
+
+def ceiling_phrase(ceiling):
+    text = ceiling_method_text(ceiling)
+    return "%s, %s" % (ceiling_noun(ceiling), text) if quota_is_known(ceiling) else text
+
+
+def estimate_ceiling(window_totals, config, samples=None, instants=None, now=None):
+    fitted = quota_fit(samples or [], config, instants=instants, now=now)
+    if fitted is not None:
+        return fitted
     settings = config["ceiling"]
     if settings["override"] is not None:
         return {
@@ -519,12 +551,13 @@ def field_coverage(records):
     return covered
 
 
-def aggregate_window(start_date, records, config, parse_stats, ceiling):
+def aggregate_window(start_date, records, config, parse_stats, ceiling, instants=None):
     tz = zone(config)
-    start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=tz)
-    end_local = start_local + timedelta(days=7)
+    start_utc, end_utc, boundary_source = window_bounds(start_date, config, instants)
+    start_local, end_local = start_utc.astimezone(tz), end_utc.astimezone(tz)
     now = datetime.now(timezone.utc)
-    elapsed_seconds = max(0.0, min((now - start_local).total_seconds(), 7 * 86400.0))
+    window_seconds = (end_utc - start_utc).total_seconds()
+    elapsed_seconds = max(0.0, min((now - start_utc).total_seconds(), window_seconds))
     elapsed_days = elapsed_seconds / 86400.0
 
     totals = _empty_bucket()
@@ -550,14 +583,15 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling):
             "key": window_key(start_date),
             "start": start_date.isoformat(),
             "end": end_local.date().isoformat(),
-            "start_utc": start_local.astimezone(timezone.utc).isoformat(),
-            "end_utc": end_local.astimezone(timezone.utc).isoformat(),
+            "start_utc": start_utc.isoformat(),
+            "end_utc": end_utc.isoformat(),
             "timezone": zone_label(config),
+            "boundary_source": boundary_source,
             "reset_weekday": config["reset_weekday"],
             "reset_hour": config["reset_hour"],
-            "is_current": start_local <= now < end_local,
+            "is_current": start_utc <= now < end_utc,
             "elapsed_days": round(elapsed_days, 4),
-            "elapsed_fraction": round(elapsed_days / 7.0, 4),
+            "elapsed_fraction": round(elapsed_seconds / window_seconds, 4) if window_seconds else 0.0,
         },
         "weights": {
             "token_class_weights": config["token_class_weights"],
@@ -580,12 +614,14 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling):
         "context": context.window_block(records, config),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
-        "ceiling": ceiling_block(ceiling, totals["weighted"], elapsed_days, now, end_local),
+        "ceiling": ceiling_block(
+            ceiling, totals["weighted"], elapsed_days, now, end_utc, start_utc <= now < end_utc
+        ),
         "parse": dict(parse_stats, records=len(records)),
     }
 
 
-def ceiling_block(ceiling, weighted, elapsed_days, now, end_local):
+def ceiling_block(ceiling, weighted, elapsed_days, now, end_local, is_current=False):
     block = dict(ceiling or {"estimate": None, "method": "unknown", "approximate": True})
     burn_rate = weighted / elapsed_days if elapsed_days > 0 else None
     remaining_seconds = max(0.0, (end_local - now).total_seconds())
@@ -594,7 +630,12 @@ def ceiling_block(ceiling, weighted, elapsed_days, now, end_local):
     remaining_budget = max(0.0, estimate - weighted) if estimate else None
 
     block["burn_rate_per_day"] = round(burn_rate, 2) if burn_rate is not None else None
-    block["percent_used"] = round(100.0 * weighted / estimate, 4) if estimate else None
+    if is_current and block.get("method") == "quota-fit" and block.get("latest_pct_is_fresh"):
+        block["percent_used"] = block.get("latest_pct")
+        block["percent_used_source"] = "quota-sample"
+    else:
+        block["percent_used"] = round(100.0 * weighted / estimate, 4) if estimate else None
+        block["percent_used_source"] = "ceiling-estimate" if estimate else None
     block["remaining_weighted"] = round(remaining_budget, 2) if remaining_budget is not None else None
     block["remaining_days"] = round(remaining_days, 4)
     block["remaining_hours"] = round(remaining_seconds / 3600.0, 2)
@@ -700,16 +741,15 @@ def _load_stores(store_dir):
     return stores
 
 
-def _window_is_closed(start_date, config, now):
-    start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=zone(config))
-    return now >= start_local + timedelta(days=7)
+def _window_is_closed(start_date, config, now, instants=None):
+    return now >= window_bounds(start_date, config, instants)[1]
 
 
-def _losses(before, after, config):
+def _losses(before, after, config, instants=None):
     now = datetime.now(timezone.utc)
     losses = []
     for start, prior in sorted(before.items()):
-        if not prior or not _window_is_closed(date.fromisoformat(start), config, now):
+        if not prior or not _window_is_closed(date.fromisoformat(start), config, now, instants):
             continue
         current = after.get(start) or {}
         prior_weighted = sum(r["weighted"] for r in prior.values())
@@ -758,7 +798,9 @@ def _prune_window(store_dir, data_dir, reports_dir, key):
             path.unlink()
 
 
-def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window):
+def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None):
+    samples = samples or []
+    instants = quota.reset_instants(samples)
     windows = {
         start: sorted(records.values(), key=lambda r: (r["ts"], r["uuid"] or ""))
         for start, records in sorted(stores.items())
@@ -772,13 +814,16 @@ def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, win
             _write_store(store_dir / (window_key(date.fromisoformat(start)) + ".jsonl"), records)
 
     ceiling = estimate_ceiling(
-        {start: sum(r["weighted"] for r in records) for start, records in windows.items()}, config
+        {start: sum(r["weighted"] for r in records) for start, records in windows.items()},
+        config,
+        samples=samples,
+        instants=instants,
     )
     written = []
     for start, records in windows.items():
         if (window and start != window) or not records:
             continue
-        aggregate = aggregate_window(date.fromisoformat(start), records, config, parse_stats, ceiling)
+        aggregate = aggregate_window(date.fromisoformat(start), records, config, parse_stats, ceiling, instants)
         key = aggregate["window"]["key"]
         _write_json(data_dir / (key + ".json"), aggregate)
         (reports_dir / (key + ".md")).write_text(render_markdown(aggregate), encoding="utf-8")
@@ -808,9 +853,11 @@ def recut(config, out_dir, state_path, window=None):
     if not known:
         raise CollectionError("the record store under %s is empty; run collect first" % store_dir)
 
+    samples = quota.load_samples(data_dir)
+    instants = quota.reset_instants(samples)
     stores = {}
     for key, record in known.items():
-        stores.setdefault(window_start(parse_ts(record["ts"]), config).isoformat(), {})[key] = record
+        stores.setdefault(window_start(parse_ts(record["ts"]), config, instants).isoformat(), {})[key] = record
     rebucketed = sum(len(bucket) for bucket in stores.values())
     if rebucketed != len(known):
         raise CollectionError("re-cut would change the record count from %d to %d" % (len(known), rebucketed))
@@ -821,7 +868,10 @@ def recut(config, out_dir, state_path, window=None):
         "files_scanned": len(tracked),
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
-    windows, ceiling, written, notices = _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window)
+    windows, ceiling, written, notices = _finalize(
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples
+    )
+    merge_agent_calls(store_dir, [], config, instants=instants)
     return {
         "windows": written,
         "new_records": 0,
@@ -829,7 +879,6 @@ def recut(config, out_dir, state_path, window=None):
         "files_scanned": parse_stats["files_scanned"],
         "malformed_lines": parse_stats["malformed_lines"],
         "ceiling": ceiling,
-        "reset": state.get("reset") or {},
         **notices,
     }
 
@@ -838,6 +887,8 @@ def reprice(config, out_dir, state_path):
     out_dir, state_path = Path(out_dir), Path(state_path)
     data_dir, reports_dir, store_dir = _prepare_dirs(out_dir)
 
+    samples = quota.load_samples(data_dir)
+    instants = quota.reset_instants(samples)
     before = _load_stores(store_dir)
     if not any(before.values()):
         raise CollectionError("the record store under %s is empty; run collect first" % store_dir)
@@ -853,7 +904,7 @@ def reprice(config, out_dir, state_path):
             for key, record in bucket.items()
         }
 
-    dropped = [loss for loss in _losses(before, stores, config) if loss["dropped_records"]]
+    dropped = [loss for loss in _losses(before, stores, config, instants) if loss["dropped_records"]]
     if dropped:
         raise CollectionError(
             "%s\nre-pricing must never lose a record; the store under %s was left untouched."
@@ -867,7 +918,7 @@ def reprice(config, out_dir, state_path):
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
     windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, None
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, None, samples
     )
     return {
         "windows": written,
@@ -876,7 +927,6 @@ def reprice(config, out_dir, state_path):
         "files_scanned": parse_stats["files_scanned"],
         "malformed_lines": parse_stats["malformed_lines"],
         "ceiling": ceiling,
-        "reset": state.get("reset") or {},
         "repriced": [
             {
                 "window": window_key(date.fromisoformat(start)),
@@ -908,7 +958,7 @@ def load_agent_calls(store_dir):
     return known
 
 
-def merge_agent_calls(store_dir, fresh, config, discard_stored=False):
+def merge_agent_calls(store_dir, fresh, config, discard_stored=False, instants=None):
     known = {} if discard_stored else load_agent_calls(store_dir)
     for call in fresh:
         known[call["tool_use_id"]] = call
@@ -916,7 +966,7 @@ def merge_agent_calls(store_dir, fresh, config, discard_stored=False):
         return known
     buckets = defaultdict(list)
     for call in known.values():
-        buckets[window_start(parse_ts(call["ts"]), config)].append(call)
+        buckets[window_start(parse_ts(call["ts"]), config, instants)].append(call)
     written = set()
     for start, calls in buckets.items():
         calls.sort(key=lambda call: (call["ts"], call["tool_use_id"]))
@@ -944,14 +994,36 @@ def _fill_tool_results(stores, pending_results):
                     tool.update(outcome)
 
 
-def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_from_transcripts_only=False):
+def boundary_drift(stores, config, instants):
+    if not instants:
+        return None
+    moved, windows = 0, set()
+    for start, bucket in stores.items():
+        for record in bucket.values():
+            if window_start(parse_ts(record["ts"]), config, instants).isoformat() != start:
+                moved += 1
+                windows.add(window_key(date.fromisoformat(start)))
+    if not moved:
+        return None
+    return {"records": moved, "windows": sorted(windows)}
+
+
+def _poll_quota(quota_poll, data_dir, windows, config, instants):
+    if quota_poll is None:
+        return {"sample": None, "skipped": "quota polling was not enabled for this run"}
+    key = window_start(datetime.now(timezone.utc), config, instants).isoformat()
+    weighted = sum(record["weighted"] for record in windows.get(key) or [])
+    return quota_poll(data_dir, weighted)
+
+
+def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_from_transcripts_only=False, quota_poll=None):
     root, out_dir, state_path = Path(root), Path(out_dir), Path(state_path)
     data_dir, reports_dir, store_dir = _prepare_dirs(out_dir)
     backfill = backfill or rebuild_from_transcripts_only
 
     state = {"files": {}} if backfill else _load_json(state_path, {"files": {}})
-    reset_state = state.get("reset") if isinstance(state.get("reset"), dict) else {}
-    reset_candidates = set() if backfill else set(reset_state.get("candidates") or [])
+    samples = quota.load_samples(data_dir)
+    instants = quota.reset_instants(samples)
 
     files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
     fresh = []
@@ -962,16 +1034,8 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         result = read_file(path, config, state["files"].get(key))
         state["files"][key] = result["state"]
         fresh.extend(result["records"])
-        reset_candidates |= set(result["reset_candidates"])
         pending_results.update(result["pending_results"])
         fresh_calls.extend(result["agent_calls"])
-
-    detected = resolve_reset_weekday(reset_candidates)
-    state["reset"] = {
-        "candidates": sorted(reset_candidates),
-        "detected": detected,
-        "ambiguous": bool(reset_candidates) and detected is None,
-    }
 
     state["files"] = {k: v for k, v in state["files"].items() if Path(k).exists()}
     malformed_total = sum(entry.get("malformed", 0) for entry in state["files"].values())
@@ -979,7 +1043,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     known = _load_stores(store_dir)
     stores = {} if rebuild_from_transcripts_only else {start: dict(b) for start, b in known.items()}
     for record in fresh:
-        start = window_start(parse_ts(record["ts"]), config).isoformat()
+        start = window_start(parse_ts(record["ts"]), config, instants).isoformat()
         stores.setdefault(start, {})[_record_key(record)] = record
     _fill_tool_results(stores, pending_results)
 
@@ -989,7 +1053,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
             % (root, len(files), malformed_total)
         )
 
-    losses = _losses(known, stores, config)
+    losses = _losses(known, stores, config, instants)
     if losses and not rebuild_from_transcripts_only:
         raise CollectionError(
             "%s\nthe record store under %s is the durable history and transcripts are pruned by Claude Code.\n"
@@ -998,18 +1062,23 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         )
 
     parse_stats = {"files_scanned": len(files), "malformed_lines": malformed_total}
-    windows, ceiling, written, notices = _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window)
-    calls = merge_agent_calls(store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only)
+    windows, ceiling, written, notices = _finalize(
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples
+    )
+    calls = merge_agent_calls(
+        store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only, instants=instants
+    )
 
     _write_json(state_path, state)
     return {
         "windows": written,
+        "quota": _poll_quota(quota_poll, data_dir, windows, config, instants),
+        "boundary_changed": boundary_drift(known, config, instants),
         "new_records": len(fresh),
         "total_records": sum(len(r) for r in windows.values()),
         "files_scanned": len(files),
         "malformed_lines": malformed_total,
         "ceiling": ceiling,
-        "reset": state["reset"],
         "losses": losses,
         "agent_calls": len(calls),
         **notices,
@@ -1065,18 +1134,23 @@ def _breakdown_table(title, entries, limit=10):
     return "## %s\n\n%s\n" % (title, _table(["key", "weighted", "turns", "cache read", "output"], rows))
 
 
+def boundary_label(meta):
+    if meta.get("boundary_source") == "quota-sample":
+        return "cut at the reset instant Anthropic reports, %s UTC" % meta["start_utc"][11:16]
+    return "cut at the configured fallback, %s %02d:00" % (meta["reset_weekday"], meta["reset_hour"])
+
+
 def render_markdown(window):
     meta, totals, ceiling = window["window"], window["totals"], window["ceiling"]
     parts = [
         "# %s" % meta["key"],
         "",
-        "%s -> %s (%s, %s reset at %02d:00) - %.2f of 7 days elapsed%s"
+        "%s -> %s (%s, %s) - %.2f days elapsed%s"
         % (
             meta["start"],
             meta["end"],
             meta["timezone"],
-            meta["reset_weekday"],
-            meta["reset_hour"],
+            boundary_label(meta),
             meta["elapsed_days"],
             "  **current window**" if meta["is_current"] else "",
         ),
@@ -1090,11 +1164,11 @@ def render_markdown(window):
             ["metric", "value"],
             [
                 ["weighted tokens spent", _num(totals["weighted"])],
+                [ceiling_phrase(ceiling), _num(ceiling["estimate"])],
                 [
-                    "ceiling estimate (%s%s)" % (ceiling["method"], ", approximate" if ceiling["approximate"] else ""),
-                    _num(ceiling["estimate"]),
+                    "percent used (%s)" % (ceiling.get("percent_used_source") or "-"),
+                    "-" if ceiling["percent_used"] is None else "%.1f%%" % ceiling["percent_used"],
                 ],
-                ["percent of ceiling", "-" if ceiling["percent_used"] is None else "%.1f%%" % ceiling["percent_used"]],
                 ["burn rate / day", _num(ceiling["burn_rate_per_day"])],
                 ["remaining until reset", _remaining_text(ceiling)],
                 ["sustainable rate / day", _sustainable_text(ceiling)],

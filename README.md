@@ -82,9 +82,10 @@ path. `python src/cli.py` from a clone works too, if you know your own interpret
 
 | Subcommand | Useful flags |
 |---|---|
-| `collect` | `--backfill` re-read every transcript · `--recut-windows` re-bucket the stored records after a reset-weekday change · `--reprice` re-price the stored records after a `model_weights` change · `--rebuild-from-transcripts-only` (destructive) · `--window YYYY-MM-DD` |
+| `collect` | `--backfill` re-read every transcript · `--recut-windows` re-bucket the stored records after the window boundary moves · `--reprice` re-price the stored records after a `model_weights` change · `--rebuild-from-transcripts-only` (destructive) · `--window YYYY-MM-DD` |
 | `report` | `--no-narrative` skip the Claude call · `--all` rebuild every page · `--refresh-narrative` |
 | `status` | `--set-reset-weekday DAY` |
+| `quota` | none |
 | `tune` | `--windows N` · `--window YYYY-MM-DD` · `--min-saving N` · `--min-cost N` · `--json` |
 | `install-schedule` | `--register` · `--platform windows\|launchd\|cron` · `--log-retention N` |
 
@@ -163,24 +164,39 @@ Three rules it keeps:
 one and says loudly that a single-window proposal is fitted to one week. `--json` emits the whole
 result, and `--min-saving` / `--min-cost` move the two floors.
 
-## The reset-day question
+## The reset window
 
-The weekly quota resets on a different weekday for different people, and nothing on disk records
-which. Until you answer, every command prints:
+The weekly quota resets at an instant Anthropic decides, and `GET /api/oauth/usage` reports it.
+Every `collect` reads the OAuth token Claude Code already stores, calls that endpoint with a ten
+second timeout, and appends one sample to `data/quota_samples.jsonl`. The token is never refreshed:
+Claude Code owns the refresh rotation and a second refresher would invalidate its session.
+
+Windows are then cut at those instants, in UTC, and displayed in your timezone. `quota` shows the
+latest sample and the ceiling fitted from the samples:
+
+```bash
+sh "${CLAUDE_PLUGIN_ROOT}/bin/my-token-spend" quota
+```
+
+When the first sample moves a boundary under records already stored, `collect` says so:
 
 ```
-RESET DAY NOT CONFIRMED: windows are being cut on Saturday, which is only a default.
+WINDOW BOUNDARY CHANGED: 412 stored record(s) across week_2026_09_05 belong to a different window
+under the reset instant Anthropic reports; re-cut every window with: collect --recut-windows
 ```
 
-Answer it once:
+The re-cut re-buckets the stored records rather than re-reading transcripts, so no history can be
+lost.
+
+Without a token or a network the run still finishes, prints one `quota sample skipped` line, and
+falls back to `reset_weekday` + `reset_hour`, which you set with:
 
 ```bash
 sh "${CLAUDE_PLUGIN_ROOT}/bin/my-token-spend" status --set-reset-weekday Saturday
-sh "${CLAUDE_PLUGIN_ROOT}/bin/my-token-spend" collect --recut-windows
 ```
 
-The re-cut is needed only when the weekday actually changes, and it re-buckets the stored
-records rather than re-reading transcripts, so no history can be lost.
+The token and your transcripts can belong to different accounts. Nothing local can tell, so the
+quota would be one account's and the spend another's.
 
 ## Why the record store is the source of truth
 
@@ -192,12 +208,6 @@ included. A run that would shrink a closed window refuses and names exactly what
 still contain. `--reprice` is the one other store-only path: it rewrites each record's weighted
 cost from the raw token counts it already holds, so it can never drop one. Nothing prunes the
 store; back it up if you back up anything.
-
-`collect` also watches transcripts for the rate-limit notice Claude Code emits when you approach
-your cap, and corrects the configured weekday on a confident match. That message's exact wording is
-unverified, so the detector matches several candidate phrasings and **never changes anything when
-two different weekdays are seen** — it reports the conflict and leaves your setting alone. New
-phrasings go in `RESET_SIGNAL_HINTS` and `RESET_WEEKDAY_PATTERNS` at the top of `src/collect.py`.
 
 ## Scheduling
 
@@ -245,7 +255,8 @@ default lives there rather than in the code, so nothing needs a source edit:
 |---|---|---|
 | `transcript_root` | `~/.claude/projects` | where transcripts are read from |
 | `timezone` | `null` | the zone window boundaries are cut in. `null` means this machine's own zone, daylight saving included. Set an IANA name (`Europe/Prague`, `America/New_York`) to pin it — needed if you work across zones and want stable boundaries |
-| `reset_weekday` / `reset_hour` | `Saturday` / `0` | where the weekly window starts. Unconfirmed until you say so; see below |
+| `reset_weekday` / `reset_hour` | `Saturday` / `0` | where the weekly window starts when no quota sample has ever landed. The real reset instant wins whenever one has; see above |
+| `ceiling.quota_fit` | `min_pct 10`, `min_samples 3`, `windows 3`, `fresh_hours 6` | the fit of your ceiling against reported utilization: the utilization floor a sample must clear, how many samples and how many windows it draws on, and how new a sample must be to be used as the percentage directly |
 | `token_class_weights`, `model_weights`, `default_model_weight` | see file | the weighted-cost unit |
 | `model_weights` keys | exact model ids | matched exactly first, then by model family, so `claude-fable-5-1` and `claude-sonnet-5-20260130` price as fable and sonnet without an entry of their own |
 | `narrative_model` | `sonnet` | model the one narrative call per report uses |
