@@ -1423,9 +1423,14 @@ def _context_chart_html(chart):
 
 
 def _timeline_chart_html(chart):
-    note = "Runs on the clock, thickness by turns; %s." % (
-        rootcause.description_note_of(chart["descriptions"])
-    )
+    if charts.timeline_mode(chart) == "turns":
+        note = "Runs by turns, largest first; every run is too short to place on the clock; %s." % (
+            rootcause.description_note_of(chart["descriptions"])
+        )
+    else:
+        note = "Runs on the clock, thickness by turns; %s." % (
+            rootcause.description_note_of(chart["descriptions"])
+        )
     if chart["hidden"]:
         note += " %s not drawn." % _plural(chart["hidden"], "smaller run")
     rows = [

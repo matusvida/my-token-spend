@@ -1,5 +1,5 @@
 import html
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def clip(text, limit):
@@ -451,23 +451,81 @@ def svg_context_series(chart, height=280):
     return _svg(height, "".join(parts))
 
 
+MIN_BAR = 3.0
+
+TICK_MINUTES = (5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880)
+
+
+def _timeline_extent(chart, label_width=300):
+    runs = chart["runs"]
+    starts = [_seconds(run["first_ts"]) or 0.0 for run in runs]
+    ends = [_seconds(run["last_ts"]) or 0.0 for run in runs]
+    origin, last = min(starts), max(ends)
+    return starts, ends, origin, max(1.0, last - origin), PLOT_WIDTH - label_width - 80
+
+
+def timeline_mode(chart, label_width=300):
+    if not chart["runs"]:
+        return "clock"
+    starts, ends, _, span, track = _timeline_extent(chart, label_width)
+    widest = max((end - start) for start, end in zip(starts, ends))
+    return "clock" if widest / span * track >= MIN_BAR else "turns"
+
+
+def _hour_ticks(origin, span):
+    minutes = span / 60.0
+    step = next((value for value in TICK_MINUTES if minutes / value <= 8), TICK_MINUTES[-1])
+    seconds = step * 60.0
+    first = origin - (origin % seconds) + seconds
+    ticks = []
+    moment = first
+    while moment <= origin + span:
+        ticks.append(moment)
+        moment += seconds
+    return ticks
+
+
+def _stamp_text(seconds, same_day):
+    moment = datetime.fromtimestamp(seconds, timezone.utc)
+    return moment.strftime("%H:%M") if same_day else moment.strftime("%m-%d %H:%M")
+
+
+def _runs_by_turns(chart, label_width, row_height):
+    rows = [
+        {
+            "label": clip_label(run["label"], LABEL_CHARS, not run["named"]),
+            "value": run["turns"],
+            "color": "--series-1" if run["named"] else OTHER,
+            "tip": "%s\n%s to %s\n%d turns, %s weighted\nagent type %s"
+            % (
+                run["label"],
+                _clock(run["first_ts"]),
+                _clock(run["last_ts"]),
+                run["turns"],
+                exact(run["weighted"]),
+                run["agent"],
+            ),
+        }
+        for run in sorted(chart["runs"], key=lambda run: (-run["turns"], run["first_ts"]))
+    ]
+    return svg_ranked_bars(rows, label_width=label_width, row_height=row_height + 6)
+
+
 def svg_run_timeline(chart, label_width=300, row_height=26):
     runs = chart["runs"]
     if not runs:
         return ""
+    if timeline_mode(chart, label_width) == "turns":
+        return _runs_by_turns(chart, label_width, row_height)
     height = MARGIN["top"] + row_height * len(runs) + 44
-    starts = [_seconds(run["first_ts"]) or 0.0 for run in runs]
-    ends = [_seconds(run["last_ts"]) or 0.0 for run in runs]
-    origin, last = min(starts), max(ends)
-    span = max(1.0, last - origin)
-    track = PLOT_WIDTH - label_width - 80
+    starts, ends, origin, span, track = _timeline_extent(chart, label_width)
     busiest = max(run["turns"] for run in runs)
     parts = []
     for index, run in enumerate(runs):
         thickness = 6.0 + 12.0 * (run["turns"] / busiest if busiest else 0.0)
         y = MARGIN["top"] + index * row_height + (row_height - thickness) / 2
         x = label_width + (starts[index] - origin) / span * track
-        length = max(3.0, (ends[index] - starts[index]) / span * track)
+        length = max(MIN_BAR, (ends[index] - starts[index]) / span * track)
         parts.append(
             '<text class="row-label" x="%d" y="%.2f" text-anchor="end">%s</text>'
             % (label_width - 12, y + thickness / 2 + 4, esc(clip_label(run["label"], LABEL_CHARS, not run["named"])))
@@ -495,18 +553,16 @@ def svg_run_timeline(chart, label_width=300, row_height=26):
         '<line class="baseline" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f"/>'
         % (label_width, baseline, label_width + track, baseline)
     )
-    first = min(run["first_ts"] for run in runs)
-    final = max(run["last_ts"] for run in runs)
-    same_day = str(first)[:10] == str(final)[:10]
-    for fraction, anchor, stamp in ((0.0, "start", first), (1.0, "end", final)):
+    same_day = str(min(run["first_ts"] for run in runs))[:10] == str(max(run["last_ts"] for run in runs))[:10]
+    for moment in _hour_ticks(origin, span):
+        x = label_width + (moment - origin) / span * track
         parts.append(
-            '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="%s">%s</text>'
-            % (
-                label_width + fraction * track,
-                baseline + 18,
-                anchor,
-                esc(_clock(stamp) if same_day else "%s %s" % (str(stamp)[5:10], _clock(stamp))),
-            )
+            '<line class="grid" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f"/>'
+            % (x, MARGIN["top"] - 4, x, baseline)
+        )
+        parts.append(
+            '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="middle">%s</text>'
+            % (x, baseline + 18, esc(_stamp_text(moment, same_day)))
         )
     return _svg(height, "".join(parts))
 

@@ -1339,3 +1339,43 @@ def test_a_derived_label_is_truncated_from_the_front_so_the_tail_distinguishes_i
     named = charts.clip_label(long_label, charts.LABEL_CHARS, derived=False)
     assert named.startswith("shell commands")
     assert named.endswith("...")
+
+
+def _timeline(minutes, span_days):
+    runs = []
+    for index in range(4):
+        day = 22 + index * span_days
+        runs.append(
+            {
+                "label": "job number %d" % index,
+                "named": True,
+                "first_ts": "2026-08-%02dT09:00:00+00:00" % day,
+                "last_ts": "2026-08-%02dT09:%02d:00+00:00" % (day, minutes),
+                "turns": 6 + index,
+                "weighted": 1000.0 * (index + 1),
+                "agent": "general-purpose",
+            }
+        )
+    return {"kind": "run_timeline", "runs": runs, "hidden": 0, "overlap": {}, "descriptions": {"described": 4, "runs": 4}}
+
+
+def test_the_run_timeline_draws_hour_ticks_when_the_runs_are_visible_on_the_clock():
+    import charts
+
+    chart = _timeline(minutes=50, span_days=0)
+    assert charts.timeline_mode(chart) == "clock"
+    svg = charts.svg_run_timeline(chart)
+    assert svg.count('class="axis-label"') >= 3
+    assert "09:10" in svg or "09:15" in svg or "09:30" in svg
+
+
+def test_a_timeline_whose_runs_are_all_slivers_falls_back_to_runs_by_turns():
+    import charts
+
+    chart = _timeline(minutes=2, span_days=3)
+    assert charts.timeline_mode(chart) == "turns"
+    svg = charts.svg_run_timeline(chart)
+    assert svg.index("job number 3") < svg.index("job number 0")
+    html = report._timeline_chart_html(chart)
+    assert "Runs by turns, largest first" in html
+    assert "too short to place on the clock" in html
