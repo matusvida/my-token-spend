@@ -687,6 +687,10 @@ def _write_store(path, records):
     )
 
 
+def load_records(store_dir, window_key):
+    return list(_load_store(Path(store_dir) / (window_key + ".jsonl")).values())
+
+
 def _load_stores(store_dir):
     stores = {}
     for existing in sorted(store_dir.glob("week_*.jsonl")):

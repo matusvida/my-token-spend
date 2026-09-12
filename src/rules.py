@@ -339,9 +339,8 @@ def _detector(key, label, count, cost, detail, evidence):
     }
 
 
-def round_trips(records, index):
+def round_trips(records):
     total_weighted = sum(record["weighted"] for record in records)
-    covered = sum(1 for record in records if record["uuid"] in index["assistant_uuids"])
     total_calls = 0
     resolved_calls = 0
 
@@ -354,7 +353,6 @@ def round_trips(records, index):
     api_errors = 0
     api_error_cost = 0.0
     by_tool = Counter()
-    kinds = Counter()
 
     for session in _ordered_sessions(records).values():
         flat = []
@@ -362,32 +360,28 @@ def round_trips(records, index):
             if record.get("is_api_error"):
                 api_errors += 1
                 api_error_cost += record["weighted"]
-            calls = index["calls"].get(record["uuid"]) or []
             tools = record["tools"] or []
             share = record["weighted"] / len(tools) if tools else 0.0
-            for position, tool in enumerate(tools):
+            for tool in tools:
                 total_calls += 1
-                call_id = calls[position][0] if position < len(calls) else None
-                outcome = index["results"].get(call_id) if call_id else None
-                if outcome is not None:
+                if tool.get("is_error") is not None:
                     resolved_calls += 1
-                flat.append((tool["name"], tool["hash"], share, outcome))
+                flat.append((tool["name"], tool["hash"], share, tool))
 
         first_failure = {}
-        for position, (name, digest, share, outcome) in enumerate(flat):
-            if not outcome or not outcome[0]:
+        for position, (name, digest, share, tool) in enumerate(flat):
+            if not tool.get("is_error"):
                 continue
             failed += 1
             failed_cost += share
             by_tool[name] += 1
-            kinds[outcome[1]] += 1
             first_failure.setdefault((name, digest), position)
-            if outcome[2]:
+            if tool.get("denied"):
                 denied += 1
                 denied_cost += share
-        for position, (name, digest, share, outcome) in enumerate(flat):
+        for position, (name, digest, share, tool) in enumerate(flat):
             origin = first_failure.get((name, digest))
-            if origin is not None and position > origin and outcome and outcome[0]:
+            if origin is not None and position > origin and tool.get("is_error"):
                 retried += 1
                 retried_cost += share
 
@@ -399,7 +393,7 @@ def round_trips(records, index):
             failed_cost,
             "the share of the turn that issued a call whose result was an error. The context cost of "
             "reading the error back is not counted, so this is a floor.",
-            {"by_tool": by_tool.most_common(5), "kinds": kinds.most_common(4)},
+            {"by_tool": by_tool.most_common(5)},
         ),
         _detector(
             RETRIED_AFTER_FAILURE,
@@ -424,16 +418,15 @@ def round_trips(records, index):
             "turns the API itself returned as an error",
             api_errors,
             api_error_cost,
-            "counted from the collector's own is_api_error flag, so it needs no transcript.",
+            "counted from the collector's own is_api_error flag.",
             {},
         ),
     ]
     return {
         "records": len(records),
-        "covered_records": covered,
-        "coverage": covered / len(records) if records else 0.0,
         "total_calls": total_calls,
         "resolved_calls": resolved_calls,
+        "result_coverage": (resolved_calls / total_calls) if total_calls else 0.0,
         "weighted": total_weighted,
         "detectors": detectors,
     }

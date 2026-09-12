@@ -1252,38 +1252,32 @@ def _render_centres(result, lines):
 
 def _render_round_trips(result, lines):
     lines.append("3. WASTED ROUND TRIPS")
-    trips = result.get("round_trips")
-    if not trips:
-        lines.append("   Not analysed: the transcript scan was skipped (--no-round-trips).")
-    else:
-        for window in trips:
-            coverage = window["coverage"]
-            label = "" if coverage >= 0.9 else "   PARTIAL: transcripts for the rest were pruned"
-            lines.append("")
+    for window in result.get("round_trips") or []:
+        coverage = window["result_coverage"]
+        lines.append("")
+        lines.append(
+            "   %s  tool results recorded for %.1f%% of %d call(s) over %d turns"
+            % (window["key"], 100 * coverage, window["total_calls"], window["records"])
+        )
+        if coverage < 0.9:
             lines.append(
-                "   %s  transcript coverage %.1f%% of %d turns%s"
-                % (window["key"], 100 * coverage, window["records"], label)
+                "     the figures below are a floor for this window, not a rate comparable to the others: "
+                "the rest of the calls were stored before outcomes were captured."
             )
-            if coverage < 0.9:
-                lines.append(
-                    "     the figures below are a floor for this window, not a rate comparable to the others."
+        for detector in window["detectors"]:
+            if not detector["count"]:
+                continue
+            lines.append(
+                "     %-46s %5d  %8s  %.2f%% of the window"
+                % (
+                    detector["label"][:46],
+                    detector["count"],
+                    _short(detector["weighted_cost"]),
+                    100 * detector["weighted_cost"] / window["weighted"] if window["weighted"] else 0.0,
                 )
-            for detector in window["detectors"]:
-                if not detector["count"]:
-                    continue
-                lines.append(
-                    "     %-46s %5d  %8s  %.2f%% of the window"
-                    % (
-                        detector["label"][:46],
-                        detector["count"],
-                        _short(detector["weighted_cost"]),
-                        100 * detector["weighted_cost"] / window["weighted"] if window["weighted"] else 0.0,
-                    )
-                )
-                for tool, count in (detector["evidence"].get("by_tool") or [])[:3]:
-                    lines.append("         %-28s %d" % (tool, count))
-                for kind, count in (detector["evidence"].get("kinds") or [])[:3]:
-                    lines.append("         %-44s %d" % (kind, count))
+            )
+            for tool, count in (detector["evidence"].get("by_tool") or [])[:3]:
+                lines.append("         %-28s %d" % (tool, count))
     rules = result["rule_round_trips"]
     lines.append("")
     lines.append("   from the collector's own rules, over the same windows:")

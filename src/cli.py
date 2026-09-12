@@ -290,7 +290,7 @@ def cmd_status(args):
 
 
 def cmd_tune(args):
-    import roundtrips
+    import collect
     import rules
     import tune
 
@@ -311,16 +311,13 @@ def cmd_tune(args):
     current = None if args.window else open_window
     wanted = list(analysed) + ([current] if current else [])
     records_by_window = {
-        data["window"]["key"]: roundtrips.load_records(store, data["window"]["key"]) for data in wanted
+        data["window"]["key"]: collect.load_records(store, data["window"]["key"]) for data in wanted
     }
 
-    trips = None
-    if not args.no_round_trips:
-        index = roundtrips.scan(Path(config["transcript_root"]).expanduser())
-        trips = []
-        for data in analysed:
-            key = data["window"]["key"]
-            trips.append(dict(rules.round_trips(records_by_window.get(key) or [], index), key=key))
+    trips = [
+        dict(rules.round_trips(records_by_window.get(data["window"]["key"]) or []), key=data["window"]["key"])
+        for data in analysed
+    ]
 
     result = tune.build(
         analysed,
@@ -590,7 +587,6 @@ def build_parser():
     tune_parser = subparsers.add_parser("tune", help="pace the window and map agent and skill spend onto the files on disk")
     tune_parser.add_argument("--window", metavar="YYYY-MM-DD", help="analyse only this window instead of the most recent closed ones")
     tune_parser.add_argument("--windows", type=int, metavar="N", help="how many closed windows to aggregate (default 4)")
-    tune_parser.add_argument("--no-round-trips", action="store_true", help="skip the transcript scan for wasted round trips")
     tune_parser.add_argument("--min-saving", type=float, metavar="N", help="weighted floor a proposal must clear")
     tune_parser.add_argument("--min-cost", type=float, metavar="N", help="weighted floor for reporting a component with no proposal")
     tune_parser.add_argument("--json", action="store_true", help="emit the machine-readable form instead of prose")

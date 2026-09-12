@@ -49,13 +49,14 @@ contradicts any of them is a bug, whatever else it improves.
    after a `reset_weekday` change re-partitions the existing store and nothing else. It must lose
    no record, be idempotent, and fail loudly on an empty store. It cannot be combined with a
    transcript re-read — the CLI rejects `--recut-windows --backfill` rather than guessing.
-6. **A pruned transcript cannot invent findings.** Round-trip analysis reports *coverage*; where the
-   transcript is gone the detectors report zero, never an extrapolation.
+6. **A pruned transcript cannot invent findings.** Round-trip analysis runs over the stored records
+   and reports the share of tool calls whose outcome was captured; a call stored before outcomes
+   were recorded counts as unresolved, never as a success.
 
 ### `tune` proposes and never applies
 
 7. **No `tune` code path may write to any agent, skill or `CLAUDE.md` file.** `tune.py` and
-   `roundtrips.py` contain no file-writing call at all — no `write_text`, `write_bytes`,
+   `rules.py` contain no file-writing call at all — no `write_text`, `write_bytes`,
    `os.replace`, `shutil.*`, `unlink`, `mkdir`, and no `open()` except for reading. Running `tune`
    must leave every file under `~/.claude` byte-identical, and must write nothing into the data
    home either.
@@ -444,7 +445,7 @@ my-token-spend/
   bin/my-token-spend  bin/my-token-spend.ps1
   commands/my-token-spend.md
   skills/my-token-spend/SKILL.md
-  src/  cli.py collect.py rules.py rootcause.py advice.py report.py tune.py roundtrips.py
+  src/  cli.py collect.py rules.py rootcause.py advice.py report.py tune.py
         paths.py
         config.default.json
   docs/design.md  README.md
@@ -529,7 +530,7 @@ the reports will understate spend accordingly.
 ## Window JSON schema
 
 `data/week_YYYY_MM_DD.json` is the canonical artefact. It is complete enough that
-`report.py` never needs to re-read a transcript. `schema_version` is `1`.
+`report.py` never needs to re-read a transcript. `schema_version` is `2`.
 
 ```
 schema_version   int
@@ -1074,7 +1075,7 @@ Kept for the reasoning, not as instructions. Nothing in this section describes c
 | `advice.sonnet_class_agents`, `tune.builtin_agents`, `tune.cheap_model_families`, and the narrative model, as literals in the source | All in `config.default.json` | The agent list in particular was one person's review-agent roster, hardcoded where no user could override it without editing plugin source |
 | `weights[downgrade_model]` looked up directly | `.get(downgrade_model, default_model_weight)` in all three places | A window is priced with the weights frozen at collection, but the downgrade model is read from the *current* config. Changing it raised `KeyError` on every historical page |
 | `tune` analysing a single window | Aggregates the last 4 closed windows by default | Advice fitted to one heavy week is advice about that week. The single-window mode survives behind `--window` and says loudly that it is fitted to one week |
-| The full tool-result text kept in the round-trip scan index | Only the error flag, a 44-character head, and the denied verdict | Three consumers, none of which needed the body. Retaining it made memory scale with the corpus rather than with the number of calls |
+| The full tool-result text kept in a second transcript scan | The record's own `result_chars`, `is_error` and `denied` per tool call | The collector already reads every transcript line once and holds the tool ids; a second pass to recover outcomes cost a full rescan and could only see transcripts that had not been pruned |
 | `ceiling_estimate` as a single config key | A `ceiling` block: `override`, `top_cluster_fraction`, `min_windows`, `headroom` | The estimate needed its calibration parameters exposed, not just its result |
 | Scraping `/usage` for the true remaining quota | Never built | Rejected as fragile at design time, and still is. The ceiling is inferred from the user's own history and labelled an estimate everywhere |
 

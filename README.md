@@ -85,7 +85,7 @@ path. `python src/cli.py` from a clone works too, if you know your own interpret
 | `collect` | `--backfill` re-read every transcript · `--recut-windows` re-bucket the stored records after a reset-weekday change · `--reprice` re-price the stored records after a `model_weights` change · `--rebuild-from-transcripts-only` (destructive) · `--window YYYY-MM-DD` |
 | `report` | `--no-narrative` skip the Claude call · `--all` rebuild every page · `--refresh-narrative` |
 | `status` | `--set-reset-weekday DAY` |
-| `tune` | `--windows N` · `--window YYYY-MM-DD` · `--no-round-trips` · `--min-saving N` · `--min-cost N` · `--json` |
+| `tune` | `--windows N` · `--window YYYY-MM-DD` · `--min-saving N` · `--min-cost N` · `--json` |
 | `install-schedule` | `--register` · `--platform windows\|launchd\|cron` · `--log-retention N` |
 
 ## `tune` - pacing, patterns, and file-level proposals
@@ -160,9 +160,8 @@ Three rules it keeps:
   output says so.
 
 `--windows N` changes how many closed windows are aggregated; `--window YYYY-MM-DD` analyses exactly
-one and says loudly that a single-window proposal is fitted to one week. `--no-round-trips` skips
-the transcript scan, `--json` emits the whole result, and `--min-saving` / `--min-cost` move the two
-floors.
+one and says loudly that a single-window proposal is fitted to one week. `--json` emits the whole
+result, and `--min-saving` / `--min-cost` move the two floors.
 
 ## The reset-day question
 

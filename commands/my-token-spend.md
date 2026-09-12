@@ -23,7 +23,7 @@ Subcommands:
 - `collect [--backfill] [--recut-windows] [--reprice] [--rebuild-from-transcripts-only] [--window YYYY-MM-DD]`
 - `report [--window YYYY-MM-DD] [--no-narrative] [--all] [--refresh-narrative]`
 - `status [--set-reset-weekday DAY]`
-- `tune [--windows N] [--window YYYY-MM-DD] [--no-round-trips] [--min-saving N] [--min-cost N] [--json]`
+- `tune [--windows N] [--window YYYY-MM-DD] [--min-saving N] [--min-cost N] [--json]`
 - `install-schedule [--register] [--platform windows|launchd|cron] [--log-retention N]`
 
 If any command prints `RESET DAY NOT CONFIRMED`, ask the user with AskUserQuestion which weekday

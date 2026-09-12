@@ -546,36 +546,37 @@ def test_a_current_window_on_track_to_exhaust_names_the_day_and_the_overshoot():
     assert "has to come off" in rendered
 
 
-def test_the_round_trip_section_states_partial_transcript_coverage(home):
-    trips = [
-        {
-            "key": "week_2026_08_22",
-            "records": 100,
-            "covered_records": 20,
-            "coverage": 0.2,
-            "weighted": 1000.0,
-            "total_calls": 10,
-            "resolved_calls": 2,
-            "detectors": [
-                {
-                    "key": "failed_tool_calls",
-                    "label": "tool calls that came back as an error",
-                    "count": 2,
-                    "weighted_cost": 100.0,
-                    "detail": "",
-                    "evidence": {},
-                }
-            ],
-        }
-    ]
-    rendered = tune.render(build([window()], home, round_trips=trips))
-    assert "transcript coverage 20.0%" in rendered
+def round_trip_window(resolved=2, total=10):
+    return {
+        "key": "week_2026_08_22",
+        "records": 100,
+        "weighted": 1000.0,
+        "total_calls": total,
+        "resolved_calls": resolved,
+        "result_coverage": resolved / total if total else 0.0,
+        "detectors": [
+            {
+                "key": "failed_tool_calls",
+                "label": "tool calls that came back as an error",
+                "count": 2,
+                "weighted_cost": 100.0,
+                "detail": "",
+                "evidence": {},
+            }
+        ],
+    }
+
+
+def test_the_round_trip_section_states_the_share_of_calls_whose_outcome_is_stored(home):
+    rendered = tune.render(build([window()], home, round_trips=[round_trip_window()]))
+    assert "tool results recorded for 20.0%" in rendered
     assert "floor for this window" in rendered
 
 
-def test_skipping_the_transcript_scan_says_so_rather_than_reporting_zero(home):
-    rendered = tune.render(build([window()], home, round_trips=None))
-    assert "the transcript scan was skipped" in rendered
+def test_a_window_whose_outcomes_are_all_stored_carries_no_floor_warning(home):
+    rendered = tune.render(build([window()], home, round_trips=[round_trip_window(resolved=10)]))
+    assert "tool results recorded for 100.0%" in rendered
+    assert "floor for this window" not in rendered
 
 
 def test_every_proposal_states_that_quality_is_not_measurable(home):
@@ -626,7 +627,6 @@ def test_tune_has_no_flag_that_applies_anything():
         "--help",
         "--window",
         "--windows",
-        "--no-round-trips",
         "--min-saving",
         "--min-cost",
         "--json",
@@ -635,7 +635,7 @@ def test_tune_has_no_flag_that_applies_anything():
 
 def test_neither_tune_module_contains_a_file_writing_call():
     src = Path(__file__).resolve().parents[1] / "src"
-    for name in ("tune.py", "roundtrips.py"):
+    for name in ("tune.py", "rules.py"):
         source = (src / name).read_text(encoding="utf-8")
         for forbidden in ("write_text(", "write_bytes(", "os.replace", "shutil.", "unlink(", "mkdir("):
             assert forbidden not in source, "%s in %s" % (forbidden, name)
@@ -690,10 +690,8 @@ def test_the_json_form_carries_the_pacing_centres_and_says_it_applies_nothing(ho
 def test_the_cli_flags_override_the_configured_floors(home, tmp_path, monkeypatch, capsys):
     agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
     live(tmp_path, monkeypatch, home)
-    assert cli.main(["tune", "--min-saving", "999999999", "--no-round-trips"]) == 0
-    out = capsys.readouterr().out
-    assert "PROPOSALS (0)" in out
-    assert "the transcript scan was skipped" in out
+    assert cli.main(["tune", "--min-saving", "999999999"]) == 0
+    assert "PROPOSALS (0)" in capsys.readouterr().out
 
 
 def test_tune_writes_nothing_into_the_data_home(home, tmp_path, monkeypatch, capsys):
