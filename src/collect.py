@@ -111,6 +111,11 @@ def window_key(start_date):
     return "week_" + start_date.strftime("%Y_%m_%d")
 
 
+def window_bounds(start_date, config):
+    start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=zone(config))
+    return start_local.astimezone(timezone.utc), (start_local + timedelta(days=7)).astimezone(timezone.utc)
+
+
 def bucket_records(records, config):
     buckets = defaultdict(list)
     for record in records:
@@ -520,10 +525,11 @@ def field_coverage(records):
 
 def aggregate_window(start_date, records, config, parse_stats, ceiling):
     tz = zone(config)
-    start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=tz)
-    end_local = start_local + timedelta(days=7)
+    start_utc, end_utc = window_bounds(start_date, config)
+    start_local, end_local = start_utc.astimezone(tz), end_utc.astimezone(tz)
     now = datetime.now(timezone.utc)
-    elapsed_seconds = max(0.0, min((now - start_local).total_seconds(), 7 * 86400.0))
+    window_seconds = (end_utc - start_utc).total_seconds()
+    elapsed_seconds = max(0.0, min((now - start_utc).total_seconds(), window_seconds))
     elapsed_days = elapsed_seconds / 86400.0
 
     totals = _empty_bucket()
@@ -549,14 +555,14 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling):
             "key": window_key(start_date),
             "start": start_date.isoformat(),
             "end": end_local.date().isoformat(),
-            "start_utc": start_local.astimezone(timezone.utc).isoformat(),
-            "end_utc": end_local.astimezone(timezone.utc).isoformat(),
+            "start_utc": start_utc.isoformat(),
+            "end_utc": end_utc.isoformat(),
             "timezone": zone_label(config),
             "reset_weekday": config["reset_weekday"],
             "reset_hour": config["reset_hour"],
-            "is_current": start_local <= now < end_local,
+            "is_current": start_utc <= now < end_utc,
             "elapsed_days": round(elapsed_days, 4),
-            "elapsed_fraction": round(elapsed_days / 7.0, 4),
+            "elapsed_fraction": round(elapsed_seconds / window_seconds, 4) if window_seconds else 0.0,
         },
         "weights": {
             "token_class_weights": config["token_class_weights"],
@@ -699,8 +705,7 @@ def _load_stores(store_dir):
 
 
 def _window_is_closed(start_date, config, now):
-    start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=zone(config))
-    return now >= start_local + timedelta(days=7)
+    return now >= window_bounds(start_date, config)[1]
 
 
 def _losses(before, after, config):
