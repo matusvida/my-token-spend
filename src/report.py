@@ -1435,7 +1435,7 @@ def _marked_legend(entries):
 
 def _context_chart_html(chart):
     names = [entry["tool"] for entry in chart["by_tool"][:5]]
-    note = "Context per turn, coloured by the tool that grew it"
+    note = "x is turn order, not a clock; colour is the tool that grew it"
     if chart.get("compactions"):
         note += "; dashed = %s" % _plural(len(chart["compactions"]), "compaction")
     note += "."
@@ -1480,7 +1480,7 @@ def _timeline_chart_html(chart):
 
 
 def _scatter_chart_html(chart):
-    note = "%s of %s tool-calling turns; one dot per turn, no jitter." % (
+    note = "%s of %s tool-calling turns, no jitter." % (
         exact(chart["plotted"]),
         exact(chart["total"]),
     )
@@ -1551,7 +1551,7 @@ def _whale_chart_html(chart):
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
         legend(series),
         svg_stacked_columns(categories, series),
-        esc("One turn per bar, split by token class."),
+        esc("One bar per turn."),
         table_view(
             ["when", "turn", "model", "agent", "weighted"],
             [
@@ -1588,9 +1588,10 @@ def _round_trip_chart_html(chart):
         [row["tool"], exact(row["failures"]), exact(row["retries"]), exact(row["denied"]), exact(row["weighted"])]
         for row in chart["rows"]
     ]
-    note = "An outcome is recorded on %s of %s calls; the rest uncounted." % (
+    note = "An outcome is recorded on %s of %s calls%s." % (
         percent(100.0 * chart["coverage"]),
         exact(chart["calls"]),
+        "" if chart["coverage"] >= 1.0 else "; the rest uncounted",
     )
     if chart["tools"] > len(chart["rows"]):
         note += " Top %d of %d tools." % (len(chart["rows"]), chart["tools"])

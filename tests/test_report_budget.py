@@ -222,7 +222,8 @@ def test_every_rule_puts_its_own_evidence_on_the_page():
     assert "counted: 250 output, 200 thinking, 1 tool call" in findings
     assert "trivial" not in findings
     assert "tool calls on the turn" not in findings
-    assert "coloured by the tool that grew it" in findings
+    assert "colour is the tool that grew it" in findings
+    assert "x is turn order, not a clock" in findings
 
 
 def test_the_cost_centres_rank_six_lanes_and_state_their_coverage():

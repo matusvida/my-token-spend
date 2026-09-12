@@ -1582,3 +1582,26 @@ def test_the_burn_axis_still_clears_a_series_above_the_ceiling():
     ticks = [float(value) * 1e9 for value in re.findall(r'class="tick"[^>]*>([0-9.]+)B<', svg)]
     assert max(ticks) >= 1_739_908_484.0
     assert max(ticks) <= 1_739_908_484.0 * 1.1
+
+
+def test_the_context_axis_is_labelled_by_turn_order():
+    import charts
+
+    chart = {
+        "kind": "context_series",
+        "series": [
+            ["2026-09-05T09:16:00+00:00", 100000, 10, "Bash"],
+            ["2026-09-05T10:24:00+00:00", 150000, 20, "Bash"],
+            ["2026-09-05T16:53:00+00:00", 200000, 30, "Bash"],
+        ],
+        "threshold": 150000,
+        "compactions": [],
+        "by_tool": [{"tool": "Bash", "tokens": 60, "results": 3}],
+        "top_results": [],
+        "coverage": {},
+    }
+    svg = charts.svg_context_series(chart)
+    assert "turn 1 (09:16)" in svg
+    assert "turn 3 (16:53)" in svg
+    html = report._context_chart_html(chart)
+    assert "x is turn order, not a clock" in html

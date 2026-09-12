@@ -505,7 +505,11 @@ def svg_context_series(chart, height=280):
     for position in (0, len(series) // 2, len(series) - 1):
         parts.append(
             '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="middle">%s</text>'
-            % (left + band * position + bar_width / 2, top + plot_height + 22, esc(_clock(series[position][0])))
+            % (
+                left + band * position + bar_width / 2,
+                top + plot_height + 22,
+                esc("turn %d (%s)" % (position + 1, _clock(series[position][0]))),
+            )
         )
     return _svg(height, "".join(parts))
 
