@@ -609,6 +609,7 @@ def aggregate_window(
 
     return {
         "schema_version": SCHEMA_VERSION,
+        "analysis_version": rules.ANALYSIS_VERSION,
         "generated_at": now.isoformat(),
         "window": {
             "key": window_key(start_date),

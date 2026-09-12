@@ -758,10 +758,12 @@ the reports will understate spend accordingly.
 ## Window JSON schema
 
 `data/week_YYYY_MM_DD.json` is the canonical artefact. It is complete enough that
-`report.py` never needs to re-read a transcript. `schema_version` is `2`.
+`report.py` never needs to re-read a transcript. `schema_version` is `2` and
+`analysis_version` is `rules.ANALYSIS_VERSION`.
 
 ```
 schema_version   int
+analysis_version int, the reasons-engine revision the findings were written by
 generated_at     ISO8601 UTC of the run that wrote the file
 
 window

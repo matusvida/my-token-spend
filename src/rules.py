@@ -5,6 +5,9 @@ import context
 import text
 
 
+ANALYSIS_VERSION = 1
+
+
 FAILED_CALLS = "failed_tool_calls"
 RETRIED_AFTER_FAILURE = "retried_after_failure"
 PERMISSION_DENIED = "permission_denied"
