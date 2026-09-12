@@ -102,7 +102,5 @@
     "min_cost": 250000,
     "windows": 4,
     "min_windows_for_proposal": 2
-  },
-  "reset_weekday_confirmed": false,
-  "reset_weekday_source": "default"
+  }
 }

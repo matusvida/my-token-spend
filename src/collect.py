@@ -1,7 +1,6 @@
 import hashlib
 import json
 import math
-import re
 import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone, tzinfo
@@ -12,56 +11,6 @@ from zoneinfo import ZoneInfo
 import rules
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-RESET_SIGNAL_HINTS = (
-    "weekly limit",
-    "usage limit",
-    "rate limit",
-    "limit reached",
-    "limit resets",
-    "limit will reset",
-    "reached your limit",
-    "out of usage",
-)
-
-_DAY = r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
-
-RESET_WEEKDAY_PATTERNS = [
-    r"resets?\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    r"reset(?:s|ting)?\s+at\s+[^.,;]{0,40}?\bon\s+" + _DAY,
-    r"will\s+reset\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    r"available\s+again\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    r"try\s+again\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    r"resumes?\s+(?:on\s+)?(?:next\s+)?" + _DAY,
-    _DAY + r"\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|:00)?",
-]
-
-
-def reset_weekday_candidates(text):
-    lowered = (text or "").lower()
-    if not any(hint in lowered for hint in RESET_SIGNAL_HINTS):
-        return set()
-    found = set()
-    for pattern in RESET_WEEKDAY_PATTERNS:
-        for match in re.finditer(pattern, lowered):
-            found.add(match.group(1).capitalize())
-    return found
-
-
-def resolve_reset_weekday(candidates):
-    unique = {c for c in candidates if c in WEEKDAYS}
-    return unique.pop() if len(unique) == 1 else None
-
-
-def _entry_text(entry):
-    parts = []
-    for source in (entry.get("content"), entry.get("summary"), (entry.get("message") or {}).get("content")):
-        if isinstance(source, str):
-            parts.append(source)
-        elif isinstance(source, list):
-            parts.extend(b.get("text") or "" for b in source if isinstance(b, dict) and b.get("type") == "text")
-    return "\n".join(p for p in parts if p)
-
 
 STANDARD_OFFSET = timedelta(seconds=-time.timezone)
 DAYLIGHT_OFFSET = timedelta(seconds=-time.altzone) if time.daylight else STANDARD_OFFSET
@@ -293,7 +242,6 @@ def read_file(path, config, stored):
             "records": [],
             "state": dict(stored),
             "malformed": 0,
-            "reset_candidates": [],
             "pending_results": {},
             "agent_calls": [],
         }
@@ -318,7 +266,6 @@ def read_file(path, config, stored):
 
     records = []
     malformed = 0
-    reset_candidates = set()
     awaiting = {}
     pending_results = {}
     calls = []
@@ -337,8 +284,6 @@ def read_file(path, config, stored):
         if not isinstance(entry, dict):
             malformed += 1
             continue
-        if "limit" in text.lower():
-            reset_candidates |= reset_weekday_candidates(_entry_text(entry))
         if entry.get("type") == "user":
             prompt = _prompt_text(entry, limit)
             if prompt:
@@ -381,7 +326,6 @@ def read_file(path, config, stored):
             "pending_compaction": after_compaction,
         },
         "malformed": malformed,
-        "reset_candidates": sorted(reset_candidates),
         "pending_results": pending_results,
         "agent_calls": calls,
     }
@@ -832,7 +776,6 @@ def recut(config, out_dir, state_path, window=None):
         "files_scanned": parse_stats["files_scanned"],
         "malformed_lines": parse_stats["malformed_lines"],
         "ceiling": ceiling,
-        "reset": state.get("reset") or {},
         **notices,
     }
 
@@ -879,7 +822,6 @@ def reprice(config, out_dir, state_path):
         "files_scanned": parse_stats["files_scanned"],
         "malformed_lines": parse_stats["malformed_lines"],
         "ceiling": ceiling,
-        "reset": state.get("reset") or {},
         "repriced": [
             {
                 "window": window_key(date.fromisoformat(start)),
@@ -953,8 +895,6 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     backfill = backfill or rebuild_from_transcripts_only
 
     state = {"files": {}} if backfill else _load_json(state_path, {"files": {}})
-    reset_state = state.get("reset") if isinstance(state.get("reset"), dict) else {}
-    reset_candidates = set() if backfill else set(reset_state.get("candidates") or [])
 
     files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
     fresh = []
@@ -965,16 +905,8 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         result = read_file(path, config, state["files"].get(key))
         state["files"][key] = result["state"]
         fresh.extend(result["records"])
-        reset_candidates |= set(result["reset_candidates"])
         pending_results.update(result["pending_results"])
         fresh_calls.extend(result["agent_calls"])
-
-    detected = resolve_reset_weekday(reset_candidates)
-    state["reset"] = {
-        "candidates": sorted(reset_candidates),
-        "detected": detected,
-        "ambiguous": bool(reset_candidates) and detected is None,
-    }
 
     state["files"] = {k: v for k, v in state["files"].items() if Path(k).exists()}
     malformed_total = sum(entry.get("malformed", 0) for entry in state["files"].values())
@@ -1012,7 +944,6 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         "files_scanned": len(files),
         "malformed_lines": malformed_total,
         "ceiling": ceiling,
-        "reset": state["reset"],
         "losses": losses,
         "agent_calls": len(calls),
         **notices,

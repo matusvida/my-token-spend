@@ -66,45 +66,6 @@ def save_config(home, config):
     paths.config_path(home).write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
-def reset_confirmed(config):
-    return bool(config.get("reset_weekday_confirmed"))
-
-
-def unconfirmed_banner(config):
-    if reset_confirmed(config):
-        return None
-    return (
-        "RESET DAY NOT CONFIRMED: windows are being cut on %s, which is only a default. "
-        'Set the real one with: status --set-reset-weekday <Monday..Sunday>' % config["reset_weekday"]
-    )
-
-
-def apply_detection(home, config, detection):
-    if not detection:
-        return None
-    detected = detection.get("detected")
-    if detection.get("ambiguous"):
-        return (
-            "reset detector saw conflicting weekdays %s in transcripts and changed nothing"
-            % ", ".join(detection.get("candidates") or [])
-        )
-    if not detected or detected == config["reset_weekday"]:
-        return None
-    previous = config["reset_weekday"]
-    config["reset_weekday"] = detected
-    config["reset_weekday_confirmed"] = True
-    config["reset_weekday_source"] = "detected"
-    history = config.setdefault("reset_weekday_corrections", [])
-    history.append(
-        {"at": datetime.now(timezone.utc).isoformat(), "from": previous, "to": detected, "source": "transcript"}
-    )
-    save_config(home, config)
-    return (
-        "reset detector corrected the reset weekday from %s to %s; re-cut every window with: collect --recut-windows"
-        % (previous, detected)
-    )
-
-
 def window_totals(data_dir):
     totals = {}
     for path in sorted(Path(data_dir).glob("week_*.json")):
@@ -214,13 +175,6 @@ def cmd_collect(args):
                 aggregate["totals"]["sessions"],
             )
         )
-
-    note = apply_detection(home, config, summary.get("reset"))
-    if note:
-        print(note, file=sys.stderr)
-    banner = unconfirmed_banner(load_config(home))
-    if banner:
-        print(banner, file=sys.stderr)
     return 0
 
 
@@ -251,8 +205,6 @@ def cmd_status(args):
             raise CliError("--set-reset-weekday must be one of %s" % ", ".join(WEEKDAYS))
         changed = weekday != config["reset_weekday"]
         config["reset_weekday"] = weekday
-        config["reset_weekday_confirmed"] = True
-        config["reset_weekday_source"] = "user"
         save_config(home, config)
         print("reset weekday set to %s" % weekday)
         if changed:
@@ -264,18 +216,12 @@ def cmd_status(args):
     totals = window_totals(paths.data_dir(home))
     print("data home        : %s  (%s)" % (home, paths.data_home_source()))
     print("config           : %s" % paths.config_path(home))
-    print("reset weekday    : %s (%s)" % (config["reset_weekday"], config.get("reset_weekday_source", "default")))
-    print("reset confirmed  : %s" % reset_confirmed(config))
-    for correction in config.get("reset_weekday_corrections") or []:
-        print("  corrected %s -> %s at %s" % (correction["from"], correction["to"], correction["at"]))
+    print("reset weekday    : %s (fallback, used only until a quota sample lands)" % config["reset_weekday"])
     state = paths.state_path(home)
     print("state            : %s (%s)" % (state, "present" if state.exists() else "missing"))
     if state.exists():
         stored = json.loads(state.read_text(encoding="utf-8"))
         print("transcripts seen : %d" % len(stored.get("files") or {}))
-        detection = stored.get("reset") or {}
-        if detection.get("candidates"):
-            print("reset signals    : %s (ambiguous=%s)" % (", ".join(detection["candidates"]), detection.get("ambiguous")))
     print("windows          : %d" % len(totals))
     for key, value in totals.items():
         print("  %s  %15.4f weighted  %6d turns  %4d sessions" % (key, value["weighted"], value["turns"], value["sessions"]))
@@ -283,9 +229,6 @@ def cmd_status(args):
     print("html reports     : %d" % len(reports))
     if reports:
         print("latest report    : %s" % reports[-1])
-    banner = unconfirmed_banner(config)
-    if banner:
-        print(banner, file=sys.stderr)
     return 0
 
 
@@ -523,7 +466,7 @@ def cmd_install_schedule(args):
     print("  entry point : %s" % cli_script())
     print("  data home   : %s  (%s)" % (home, paths.data_home_source()))
     print("  log dir     : %s  (kept: %d files per job)" % (log_dir, args.log_retention))
-    print("  reset day   : %s%s" % (config["reset_weekday"], "" if reset_confirmed(config) else " (UNCONFIRMED)"))
+    print("  reset day   : %s" % config["reset_weekday"])
     for job in jobs:
         print("  %-8s %s" % (job["name"] + ":", job["schedule"]))
     print("")
@@ -581,7 +524,9 @@ def build_parser():
     report_parser.set_defaults(func=cmd_report)
 
     status_parser = subparsers.add_parser("status", help="show where data lives and what has been collected")
-    status_parser.add_argument("--set-reset-weekday", metavar="DAY", help="record the weekday the quota resets on")
+    status_parser.add_argument(
+        "--set-reset-weekday", metavar="DAY", help="weekday the windows fall back to when no quota sample is stored"
+    )
     status_parser.set_defaults(func=cmd_status)
 
     tune_parser = subparsers.add_parser("tune", help="pace the window and map agent and skill spend onto the files on disk")
