@@ -1081,7 +1081,7 @@ def test_the_findings_section_refuses_to_claim_intent():
     html = report.render_html([window], window, analysis=analysed(window, records))
     findings = html.split("<h2>Findings</h2>")[1].split("<h2>Cost centres</h2>")[0]
     assert "never summed" in findings
-    assert "nothing here says why anyone chose the work" in findings
+    assert "say what the work was, never why" in findings
 
 
 def test_a_missing_record_store_is_stated_not_faked():

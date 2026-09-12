@@ -2,9 +2,9 @@ import rootcause
 import rules
 
 SCATTER_POINTS = 400
-TIMELINE_RUNS = 8
+TIMELINE_RUNS = 6
 TABLE_ROWS = 4
-LANE_ROWS = 5
+LANE_ROWS = 4
 
 RULE_GROUPS = {"context_bloat": 1, "subagent_storm": 1, "agent_type_skew": 1}
 ROUND_TRIPS = "round_trips"

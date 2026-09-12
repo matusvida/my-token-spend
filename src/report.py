@@ -987,6 +987,8 @@ GROUP_TITLES = [
     ),
 ]
 
+GROUP_CARDS = 3
+
 RISK_WORDS = {"none": "no performance risk", "low": "low performance risk", "medium": "medium performance risk"}
 
 
@@ -1023,7 +1025,7 @@ def _protected_agents(window, recommendations):
     protected = [row for row in named[:4] if row["key"] not in downgraded]
     if not protected:
         return ""
-    names = ", ".join("%s (%s)" % (row["key"], compact(row["weighted"])) for row in protected)
+    names = ", ".join(row["key"] for row in protected)
     return (
         '<p class="sub">Left alone, as judgement work: %s.</p>' % esc(names)
     )
@@ -1055,7 +1057,13 @@ def _recommendations_section(window, recommendations):
         members = [item for item in recommendations if item["group"] == key]
         if not members:
             continue
-        cards = "".join(_recommendation_card(item) for item in members)
+        shown, rest = members[:GROUP_CARDS], members[GROUP_CARDS:]
+        cards = "".join(_recommendation_card(item) for item in shown)
+        if rest:
+            cards += "<details><summary>%s</summary>%s</details>" % (
+                esc("%d smaller" % len(rest)),
+                "".join(_recommendation_card(item) for item in rest),
+            )
         extra = _protected_agents(window, recommendations) if key == "strategy" else ""
         groups.append(
             '<div class="rec-group"><div class="rec-group-head"><h3>%s</h3>'
@@ -1064,8 +1072,8 @@ def _recommendations_section(window, recommendations):
         )
     return (
         '<section class="card"><h2>Recommendations</h2>'
-        '<p class="sub">Every saving comes from one rule that fired on this window. The rules overlap by '
-        "design, so the figures are shown separately and <strong>never added into a total</strong>.</p>"
+        '<p class="sub">Each saving comes from one rule; the rules overlap, so they are '
+        "<strong>never added into a total</strong>.</p>"
         '<details><summary>Ranked overview</summary><div class="chart-wrap">%s</div></details>%s%s</section>'
         % (
             svg_ranked_bars(bars, label_width=330),
@@ -1338,9 +1346,9 @@ def _legend_of(names):
 
 def _context_chart_html(chart):
     names = [entry["tool"] for entry in chart["by_tool"][:5]]
-    note = "Height is the context carried, colour the tool that grew it"
+    note = "Context per turn, coloured by the tool that grew it"
     if chart.get("compactions"):
-        note += "; dashed lines are the %s" % _plural(len(chart["compactions"]), "compaction")
+        note += "; dashed = %s" % _plural(len(chart["compactions"]), "compaction")
     note += "."
     rows = [
         [entry["tool"], exact(entry["tokens"]), exact(entry["results"])]
@@ -1355,7 +1363,7 @@ def _context_chart_html(chart):
 
 
 def _timeline_chart_html(chart):
-    note = "One bar per run on the clock, thickness by turns; %s." % (
+    note = "Runs on the clock, thickness by turns; %s." % (
         rootcause.description_note_of(chart["descriptions"])
     )
     if chart["hidden"]:
@@ -1374,12 +1382,12 @@ def _timeline_chart_html(chart):
 
 
 def _scatter_chart_html(chart):
-    note = "%s of %s tool-calling turns, x jittered, dot size by thinking tokens." % (
+    note = "%s of %s tool-calling turns; x jittered, dot size by thinking." % (
         exact(chart["plotted"]),
         exact(chart["total"]),
     )
     if chart.get("above_axis"):
-        note += " %s above the axis top are not drawn." % _plural(chart["above_axis"], "turn")
+        note += " %s above the axis not drawn." % _plural(chart["above_axis"], "turn")
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>" % (
         _legend_of(chart["models"]),
         svg_scatter(chart),
@@ -1387,7 +1395,7 @@ def _scatter_chart_html(chart):
     )
 
 
-CLUSTER_BARS = 5
+CLUSTER_BARS = 4
 
 
 def _cluster_bar_rows(rows):
@@ -1439,7 +1447,7 @@ def _whale_chart_html(chart):
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
         legend(series),
         svg_stacked_columns(categories, series),
-        esc("One bar per turn, split by token class, labelled with its clock time."),
+        esc("One turn per bar, split by token class."),
         table_view(
             ["when", "model", "agent", "weighted"],
             [[row["label"], row["model"], row["agent"], exact(row["weighted"])] for row in chart["rows"]],
@@ -1453,9 +1461,9 @@ def _repeat_chart_html(chart):
         [row["tool"], exact(row["repeats"]), row["first"], row["last"], exact(row["weighted"])]
         for row in chart["rows"]
     ]
-    note = "The stored hash identifies identical input; the text is not stored."
+    note = "The hash identifies identical input; the text is not stored."
     if chart["hidden"]:
-        note += " %d more in the raw breakdowns." % chart["hidden"]
+        note += " %d more below." % chart["hidden"]
     return '<div class="table-wrap">%s</div><p class="chart-note">%s</p>' % (
         table(["tool", "repeats", "first", "last", "weighted"], rows),
         esc(note),
@@ -1467,7 +1475,7 @@ def _round_trip_chart_html(chart):
         [row["tool"], exact(row["failures"]), exact(row["retries"]), exact(row["denied"]), exact(row["weighted"])]
         for row in chart["rows"]
     ]
-    note = "An outcome is recorded on %s of %s calls; the rest are not counted." % (
+    note = "An outcome is recorded on %s of %s calls; the rest uncounted." % (
         percent(100.0 * chart["coverage"]),
         exact(chart["calls"]),
     )
@@ -1582,7 +1590,7 @@ def _findings_cards_section(window, analysis, store):
     return (
         '<section class="card"><h2>Findings</h2>'
         '<div class="notice">One chart or table is the evidence. Lenses overlap, are never summed, and '
-        "nothing here says why anyone chose the work.</div>"
+        "say what the work was, never why.</div>"
         "%s</section>" % "".join(cards)
     )
 
@@ -1640,8 +1648,7 @@ def _lanes_section(window, analysis, store):
     total = window["totals"]["weighted"]
     return (
         '<section class="card"><h2>Cost centres</h2>'
-        '<p class="sub">The same window, ranked six ways; each footer states the coverage of its '
-        "field.</p>%s%s</section>"
+        '<p class="sub">The same window ranked six ways; each footer states its coverage.</p>%s%s</section>'
         % (
             _shortfall_notice(store),
             "".join(_lane_block(lane, total) for lane in analysis["evidence"]["lanes"]),
@@ -1787,7 +1794,16 @@ def _raw_section(parts):
     )
 
 
+NARRATIVE_WORDS = 120
+
+
+def _clip_words(text, limit):
+    words = text.split()
+    return text if len(words) <= limit else " ".join(words[:limit]) + "..."
+
+
 def _narrative_section(narrative):
+    narrative = _clip_words(narrative, NARRATIVE_WORDS) if narrative else narrative
     if not narrative:
         return (
             '<section class="card narrative" data-narrative=""><h2>Why this week looked like this</h2>'

@@ -177,10 +177,19 @@ def test_the_visible_page_stays_under_the_word_cap():
         records,
         calls,
         recommendations=_recommendations(window),
-        narrative=" ".join(["prose"] * 120),
+        narrative=" ".join(["prose"] * 400),
     )
     words = report.visible_words(html)
     assert words <= WORD_CAP, "visible words: %d" % words
+
+
+def test_a_long_narrative_is_clipped_to_its_cap():
+    window, records, calls = real_shaped()
+    html = rendered(window, records, calls, narrative=" ".join("word%d" % index for index in range(400)))
+    body = html.split("<h2>Why this week looked like this</h2>")[1].split("</section>")[0]
+    assert "word119" in body
+    assert "word120" not in body
+    assert report.NARRATIVE_WORDS == 120
 
 
 def _recommendations(window):
@@ -211,7 +220,7 @@ def test_every_rule_puts_its_own_evidence_on_the_page():
     assert 'id="round_trips"' in findings
     assert "threshold" in findings
     assert "trivial: 250 output, 1 tool call" in findings
-    assert "colour the tool that grew it" in findings
+    assert "coloured by the tool that grew it" in findings
 
 
 def test_the_cost_centres_rank_six_lanes_and_state_their_coverage():

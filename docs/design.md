@@ -440,7 +440,11 @@ detectors get tables.
 **Word budget.** Visible text outside `<details>` is capped at 1,500 words, measured by
 `report.visible_words`, which drops every `<details>` body but keeps its `<summary>`, and counts the
 text inside the SVG charts like any other. A test renders a real-shaped fixture window through
-`collect.aggregate_window` and fails above the cap.
+`collect.aggregate_window` and fails above the cap. Three things hold the budget on a busy window:
+the narrative is clipped to `NARRATIVE_WORDS` (120) at render time as well as asked for in the
+prompt, each recommendation group shows its three largest cards and folds the rest into a
+`<details>`, and every chart caps its visible rows — the collapsed remainder is always stated, never
+dropped.
 
 `evidence.py` holds the per-card chart payloads and the lane rankings, and `charts.py` the SVG
 geometry; `report.py` is left with page assembly. `evidence.build` is attached to the root-cause
