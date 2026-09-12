@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import traceback
+from datetime import date, timedelta
 
 import advice
 import charts
@@ -735,8 +736,23 @@ def _delta_section(previous, current, rows):
     )
 
 
+def calendar_days(window):
+    stored = {day["date"]: day for day in window["by_day"]}
+    if not stored:
+        return []
+    start = date.fromisoformat(window["window"]["start"])
+    last = date.fromisoformat(max(stored))
+    days = []
+    cursor = start
+    while cursor <= last:
+        key = cursor.isoformat()
+        days.append(stored.get(key) or {"date": key, "weighted": 0.0, "turns": 0, "cache_read": 0, "output": 0})
+        cursor += timedelta(days=1)
+    return days
+
+
 def _daily_section(window, ceiling):
-    days = window["by_day"]
+    days = calendar_days(window)
     if not days:
         return ""
     labels = [day["date"][5:] for day in days]
@@ -1261,7 +1277,7 @@ def reset_label(window):
 
 
 def _burn_chart(window):
-    days = window["by_day"]
+    days = calendar_days(window)
     if not days:
         return ""
     cumulative = []

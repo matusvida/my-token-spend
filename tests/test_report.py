@@ -1433,3 +1433,22 @@ def test_the_mismatch_strip_plots_output_against_thinking_with_the_rule_box_in_t
     assert svg.count('class="dot"') == 2
     corner = svg.index("counted: 250 output")
     assert 'text-anchor="end"' in svg[corner - 80 : corner]
+
+
+def test_the_burn_chart_zero_fills_every_calendar_day_from_the_window_start():
+    window = make_window(start="2026-08-22", total=600000.0)
+    window["by_day"] = [
+        {"date": "2026-08-24", "weighted": 200000.0, "turns": 4, "cache_read": 10, "output": 5},
+        {"date": "2026-08-26", "weighted": 400000.0, "turns": 6, "cache_read": 20, "output": 7},
+    ]
+    days = report.calendar_days(window)
+    assert [day["date"] for day in days] == [
+        "2026-08-22",
+        "2026-08-23",
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+    ]
+    assert days[0]["weighted"] == 0.0
+    assert days[3]["weighted"] == 0.0
+    assert report._burn_chart(window).count("weighted spent so far") == 5
