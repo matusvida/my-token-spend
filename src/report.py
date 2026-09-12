@@ -855,6 +855,12 @@ def _recorded_on(window, field):
     return "recorded on %.0f%% of turns." % (100.0 * block["share"])
 
 
+def _turn_share(window, entries):
+    turns = window["totals"]["turns"]
+    named = sum(entry.get("turns") or 0 for entry in entries)
+    return "Recorded on %.0f%% of turns." % (100.0 * named / turns) if turns else ""
+
+
 def _rows_from(entries, limit=8, label_key="key"):
     ordered = sorted(entries, key=lambda entry: -entry["weighted"])[:limit]
     return [
@@ -885,9 +891,9 @@ def _composition_section(window):
             _breakdown("Main agent vs subagents", "Sidechain turns priced with the same weights.", lane_rows, total, "lane"),
             _breakdown("Subagent types", "Subagent turns only; turns with no attribution are pooled.", agents, total, "agent type"),
             _breakdown("Repos", "By the working directory recorded on each turn.", repos, total, "repo"),
-            _breakdown("Models", "", _rows_from(window["by_model"]), total, "model"),
+            _breakdown("Models", "Recorded on every turn.", _rows_from(window["by_model"]), total, "model"),
             _breakdown("Effort tiers", _recorded_on(window, "effort"), _rows_from(window["by_effort"]), total, "effort"),
-            _breakdown("Skills", "", _rows_from(window["by_skill"], limit=6), total, "skill"),
+            _breakdown("Skills", _turn_share(window, window["by_skill"]), _rows_from(window["by_skill"], limit=6), total, "skill"),
         )
     )
 

@@ -300,3 +300,13 @@ def test_the_effort_ranking_states_what_its_share_is_measured_on():
     block = html.split("<h3>Effort tiers</h3>")[1].split("<h3>")[0]
     assert "recorded on 100% of turns." in block
     assert window["field_coverage"]["effort"]["share"] == 1.0
+
+
+def test_no_ranking_asserts_a_share_with_an_empty_subtitle():
+    import re
+
+    window, records, calls = real_shaped()
+    html = rendered(window, records, calls)
+    assert '<p class="sub"></p>' not in html
+    assert re.search(r"<h3>Skills</h3><p class=\"sub\">Recorded on \d+% of turns\.</p>", html)
+    assert "<h3>Models</h3><p class=\"sub\">Recorded on every turn.</p>" in html
