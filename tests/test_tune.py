@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import cli
+import agentfiles
 import tune
 
 CONFIG = json.loads((Path(__file__).resolve().parents[1] / "src" / "config.default.json").read_text(encoding="utf-8"))
@@ -44,7 +45,7 @@ def home(tmp_path):
 
 
 def roots_for(home, project_dirs=()):
-    return tune.default_roots(
+    return agentfiles.default_roots(
         user_home=home, project_dirs=project_dirs, plugins_home=home / ".claude" / "plugins"
     )
 
@@ -123,18 +124,18 @@ def build(windows, home, records=None, **kwargs):
 
 def test_a_name_that_resolves_to_exactly_one_file_is_mapped_to_it(home):
     path = agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
-    assert tune.resolve_agent("mr-scout", roots_for(home)) == [path]
+    assert agentfiles.resolve_agent("mr-scout", roots_for(home)) == [path]
 
 
 def test_a_name_that_resolves_to_no_file_resolves_to_nothing(home):
-    assert tune.resolve_agent("mr-scout", roots_for(home)) == []
+    assert agentfiles.resolve_agent("mr-scout", roots_for(home)) == []
 
 
 def test_a_name_that_resolves_to_several_files_returns_all_of_them(home, tmp_path):
     project = tmp_path / "repo"
     user_copy = agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
     project_copy = agent_file(project / ".claude" / "agents", "mr-scout", model="opus")
-    found = tune.resolve_agent("mr-scout", roots_for(home, project_dirs=[str(project)]))
+    found = agentfiles.resolve_agent("mr-scout", roots_for(home, project_dirs=[str(project)]))
     assert sorted(found) == sorted([user_copy, project_copy])
 
 
@@ -158,7 +159,7 @@ def test_several_matches_are_listed_and_no_edit_is_proposed(home, tmp_path):
 def test_a_file_is_matched_by_its_frontmatter_name_not_only_its_stem(home):
     directory = home / ".claude" / "agents"
     (directory / "renamed.md").write_text("---\nname: mr-scout\n---\n\nBody.\n", encoding="utf-8")
-    assert [p.name for p in tune.resolve_agent("mr-scout", roots_for(home))] == ["renamed.md"]
+    assert [p.name for p in agentfiles.resolve_agent("mr-scout", roots_for(home))] == ["renamed.md"]
 
 
 def test_a_plugin_qualified_name_only_matches_that_plugin(home):
@@ -175,25 +176,25 @@ def test_a_plugin_qualified_name_only_matches_that_plugin(home):
         ),
         encoding="utf-8",
     )
-    assert [str(p) for p in tune.resolve_skill("glab:glab", roots_for(home))] == [
+    assert [str(p) for p in agentfiles.resolve_skill("glab:glab", roots_for(home))] == [
         str(install / "skills" / "glab" / "SKILL.md")
     ]
-    assert [p.name for p in tune.resolve_skill("glab", roots_for(home))] == ["glab.md"]
-    assert len(tune.resolve_skill("glab:other", roots_for(home))) == 0
+    assert [p.name for p in agentfiles.resolve_skill("glab", roots_for(home))] == ["glab.md"]
+    assert len(agentfiles.resolve_skill("glab:other", roots_for(home))) == 0
 
 
 def test_a_skill_name_also_matches_a_slash_command_file(home):
     commands = home / ".claude" / "commands"
     commands.mkdir(parents=True)
     (commands / "review-mr.md").write_text("Review a merge request.\n", encoding="utf-8")
-    assert [p.name for p in tune.resolve_skill("review-mr", roots_for(home))] == ["review-mr.md"]
+    assert [p.name for p in agentfiles.resolve_skill("review-mr", roots_for(home))] == ["review-mr.md"]
 
 
 def test_a_reference_file_nested_inside_another_skill_is_not_a_match(home):
     nested = home / ".claude" / "skills" / "linear-mcp-cli" / "references"
     nested.mkdir(parents=True)
     (nested / "comments.md").write_text("reference material\n", encoding="utf-8")
-    assert tune.resolve_skill("comments", roots_for(home)) == []
+    assert agentfiles.resolve_skill("comments", roots_for(home)) == []
 
 
 def test_the_default_selection_is_the_last_n_closed_windows():
@@ -659,7 +660,7 @@ def live(tmp_path, monkeypatch, home, extra=None):
     (tmp_path / "transcripts").mkdir(exist_ok=True)
     paths.config_path(data_home).write_text(json.dumps(config), encoding="utf-8")
     fixed = roots_for(home)
-    monkeypatch.setattr(tune, "default_roots", lambda **kwargs: fixed)
+    monkeypatch.setattr(agentfiles, "default_roots", lambda **kwargs: fixed)
     return data_home
 
 
