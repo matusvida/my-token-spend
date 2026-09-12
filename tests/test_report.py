@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import charts
 import report
 
 
@@ -159,11 +160,11 @@ def test_exact_and_percent():
 
 
 def test_nice_ticks_cover_the_maximum():
-    ticks = report.nice_ticks(812_850_236)
+    ticks = charts.nice_ticks(812_850_236)
     assert ticks[0] == 0
     assert ticks[-1] >= 812_850_236
     assert ticks == sorted(ticks)
-    assert report.nice_ticks(0) == [0.0, 1.0]
+    assert charts.nice_ticks(0) == [0.0, 1.0]
 
 
 def test_repo_label_uses_the_leaf_directory():
