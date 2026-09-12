@@ -484,7 +484,7 @@ def svg_stacked_columns(categories, series, reference=None, height=PLOT_HEIGHT):
             % (left, y, PLOT_WIDTH - MARGIN["right"], y)
         )
         parts.append(
-            '<text class="reference-label" x="%.2f" y="%.2f" text-anchor="end">ceiling estimate %s</text>'
+            '<text class="reference-label" x="%.2f" y="%.2f" text-anchor="end">ceiling %s</text>'
             % (PLOT_WIDTH - MARGIN["right"], y - 8, esc(compact(reference)))
         )
     parts.append("</svg>")
@@ -908,7 +908,7 @@ def _cross_week_section(windows, target, ceiling):
         )
     return (
         '<section class="card"><h2>Every window, main agent vs subagents</h2>'
-        '<p class="sub">Weighted tokens per reset window. The horizontal rule is the estimated ceiling.</p>'
+        '<p class="sub">Weighted tokens per reset window. The horizontal rule is the ceiling.</p>'
         "%s%s<div class=\"chart-wrap\">%s</div>%s</section>"
         % (
             legend(series),
@@ -1362,11 +1362,11 @@ def _headline_section(window, previous):
     if ceiling.get("percent_used") is not None:
         meter_html = meter(
             ceiling["percent_used"] / 100.0,
-            "%s of %s, %s weighted tokens, %s remaining"
+            "%s of %s weighted tokens (%s), %s remaining"
             % (
                 percent(ceiling["percent_used"]),
-                collect.ceiling_noun(ceiling),
                 compact(ceiling["estimate"]),
+                collect.ceiling_phrase(ceiling),
                 compact(ceiling.get("remaining_weighted") or 0),
             ),
         )
@@ -1395,11 +1395,10 @@ def _verdict_lines(window, previous):
         (
             "Window position",
             percent(percent_used) if percent_used is not None else "unknown",
-            "of %s of %s (%s), %s left"
+            "of %s (%s), %s left"
             % (
                 compact(ceiling.get("estimate") or 0),
-                collect.ceiling_noun(ceiling),
-                collect.ceiling_method_text(ceiling),
+                collect.ceiling_phrase(ceiling),
                 compact(ceiling.get("remaining_weighted") or 0),
             ),
         ),
@@ -1919,7 +1918,7 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
 def build_narrative_prompt(target, previous, rows, recommendations=None):
     lines = [
         "You are writing two short paragraphs for a personal Claude Code token-usage report.",
-        "Window %s (%s to %s), %s weighted tokens, %s of the estimated ceiling."
+        "Window %s (%s to %s), %s weighted tokens, %s of the ceiling."
         % (
             target["window"]["key"],
             target["window"]["start"],

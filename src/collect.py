@@ -387,7 +387,7 @@ def ceiling_method_text(ceiling):
         band = ceiling.get("band_pct")
         return "fitted from %d usage samples%s" % (
             ceiling.get("samples_used") or 0,
-            "" if band is None else ", ±%.0f%%" % band,
+            "" if band is None else ", +/-%.0f%%" % band,
         )
     if method == "override":
         return "the ceiling set in your config"
@@ -404,6 +404,11 @@ def quota_is_known(ceiling):
 
 def ceiling_noun(ceiling):
     return "your weekly quota" if quota_is_known(ceiling) else "an estimated ceiling"
+
+
+def ceiling_phrase(ceiling):
+    text = ceiling_method_text(ceiling)
+    return "%s, %s" % (ceiling_noun(ceiling), text) if quota_is_known(ceiling) else text
 
 
 def estimate_ceiling(window_totals, config, samples=None, instants=None, now=None):
@@ -1157,7 +1162,7 @@ def render_markdown(window):
             ["metric", "value"],
             [
                 ["weighted tokens spent", _num(totals["weighted"])],
-                ["%s (%s)" % (ceiling_noun(ceiling), ceiling_method_text(ceiling)), _num(ceiling["estimate"])],
+                [ceiling_phrase(ceiling), _num(ceiling["estimate"])],
                 [
                     "percent used (%s)" % (ceiling.get("percent_used_source") or "-"),
                     "-" if ceiling["percent_used"] is None else "%.1f%%" % ceiling["percent_used"],

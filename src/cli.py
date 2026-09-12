@@ -279,10 +279,7 @@ def cmd_quota(args):
 
     totals = {key: value["weighted"] for key, value in window_totals(data_dir).items()}
     ceiling = collect.estimate_ceiling(totals, config, samples=samples, instants=instants)
-    print(
-        "ceiling          : %s weighted - %s (%s)"
-        % (collect._num(ceiling["estimate"]), collect.ceiling_method_text(ceiling), collect.ceiling_noun(ceiling))
-    )
+    print("ceiling          : %s weighted - %s" % (collect._num(ceiling["estimate"]), collect.ceiling_phrase(ceiling)))
     return 0
 
 

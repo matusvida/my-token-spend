@@ -1083,14 +1083,12 @@ def _render_pacing(result, lines):
     ceiling = result["ceiling"]
     lines.append("1. PACING AND EXHAUSTION")
     block = {"method": result["ceiling_method"], **(result.get("ceiling_detail") or {})}
-    lines.append(
-        "   %s %s weighted - %s."
-        % (collect.ceiling_noun(block).capitalize(), _num(ceiling), collect.ceiling_method_text(block))
-    )
+    phrase = collect.ceiling_phrase(block)
+    lines.append("   ceiling %s weighted - %s." % (_num(ceiling), phrase))
     for window in result["pacing"]:
         lines.append("")
         lines.append(
-            "   %s  %s weighted  %s of the estimated ceiling%s"
+            "   %s  %s weighted  %s of the ceiling%s"
             % (
                 window["key"],
                 _short(window["total_weighted"]),
@@ -1126,16 +1124,16 @@ def _render_pacing(result, lines):
         )
         if window["exhausted_on"]:
             lines.append(
-                "     reached the estimated ceiling on day %d (%s)"
+                "     reached the ceiling on day %d (%s)"
                 % (window["exhausted_on_day"], window["exhausted_on"])
             )
         elif window["approached_on"]:
             lines.append(
-                "     came within 10%% of the estimated ceiling on day %d (%s)"
+                "     came within 10%% of the ceiling on day %d (%s)"
                 % (window["approached_on_day"], window["approached_on"])
             )
         else:
-            lines.append("     never approached the estimated ceiling")
+            lines.append("     never approached the ceiling")
         drivers = window.get("drivers") or {}
         for lane in ("repo", "agent", "skill"):
             items = drivers.get(lane) or []
@@ -1156,7 +1154,7 @@ def _render_pacing(result, lines):
         return
     lines.append("   CURRENT WINDOW %s" % current["key"])
     lines.append(
-        "     %.1f days elapsed, %.1f left. %s weighted so far, %s of the estimated ceiling."
+        "     %.1f days elapsed, %.1f left. %s weighted so far, %s of the ceiling."
         % (
             current["elapsed_days"],
             current["remaining_days"],

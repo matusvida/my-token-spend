@@ -165,7 +165,7 @@ def test_a_top_cluster_ceiling_never_borrows_the_sample_percent():
 def test_the_method_text_names_the_fit_and_its_band():
     fitted = fit(on_the_line((72, 20.0), (48, 40.0), (24, 60.0)))
     text = collect.ceiling_method_text(fitted)
-    assert text == "fitted from 3 usage samples, ±0%"
+    assert text == "fitted from 3 usage samples, +/-0%"
     assert collect.ceiling_noun(fitted) == "your weekly quota"
 
 
@@ -214,3 +214,11 @@ def test_the_quota_command_prints_the_latest_sample_and_the_ceiling(home, capsys
     assert "2026-09-12T03:00:00+00:00" in out
     assert "fitted from 3 usage samples" in out
     assert "your weekly quota" in out
+
+
+def test_the_phrase_names_the_quota_only_when_it_is_one():
+    fitted = fit(on_the_line((72, 20.0), (48, 40.0), (24, 60.0)))
+    assert collect.ceiling_phrase(fitted) == "your weekly quota, fitted from 3 usage samples, +/-0%"
+    top = collect.estimate_ceiling({"a": 100.0, "b": 200.0, "c": 300.0}, CONFIG, samples=[])
+    assert collect.ceiling_phrase(top) == "estimated ceiling, from your own heavy weeks"
+    assert "quota" not in collect.ceiling_phrase(top)
