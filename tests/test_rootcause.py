@@ -624,3 +624,9 @@ def test_clusters_beyond_the_cap_collapse_into_a_tail_that_counts_its_runs():
 
 def test_a_cluster_list_that_fits_the_cap_has_no_tail_note():
     assert rootcause.tail_note(rootcause.cluster_runs(_described_runs(4), max_clusters=12)) is None
+
+
+def test_a_cluster_with_no_usable_member_label_says_so_in_grammar():
+    cluster = {"label": "94 smaller job clusters", "mixed": True, "other_labels": ["no prompt captured"]}
+    assert rootcause.cluster_display(cluster) == "94 smaller job clusters - mixed, no member label is usable"
+    assert rootcause.member_labels(cluster) is None

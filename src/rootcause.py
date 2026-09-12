@@ -509,15 +509,21 @@ def _skill_mix(records):
     )
 
 
+NO_MEMBER_LABEL = "no member label is usable"
+
+
 def member_labels(cluster, limit=2):
     usable = [label for label in cluster["other_labels"] if label_usable(label)]
-    return " | ".join(usable[:limit]) if usable else "none the prompt labels can name"
+    return " | ".join(usable[:limit]) if usable else None
 
 
 def cluster_display(cluster, limit=70):
     if not cluster["mixed"]:
         return cluster["label"]
-    return "%s - mixed, e.g. %s" % (cluster["label"], member_labels(cluster, 1)[:limit])
+    labels = member_labels(cluster, 1)
+    if labels is None:
+        return "%s - mixed, %s" % (cluster["label"], NO_MEMBER_LABEL)
+    return "%s - mixed, e.g. %s" % (cluster["label"], labels[:limit])
 
 
 def _cluster_line(cluster):
@@ -539,7 +545,12 @@ def _cluster_line(cluster):
     if cluster["mixed"]:
         parts.append(
             "MIXED: these runs share tools, repo and branch but not a common job label, so the label above is "
-            "derived from the tools; member labels include %s" % member_labels(cluster, 2)
+            "derived from the tools; %s"
+            % (
+                "member labels include %s" % member_labels(cluster, 2)
+                if member_labels(cluster, 2)
+                else NO_MEMBER_LABEL
+            )
         )
     elif cluster.get("label_source") == "derived":
         parts.append(
