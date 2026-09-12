@@ -1809,3 +1809,62 @@ def test_the_context_legend_leaves_out_a_tool_that_never_led_a_turn():
     legended = set(re.findall(r'class="swatch" style="background:var\((--[a-z0-9-]+)\)"', html))
     assert legended == set(re.findall(r'class="mark"[^>]*fill="var\((--[a-z0-9-]+)\)"', charts.svg_context_series(chart)))
     assert "Grep" not in re.search(r'<div class="legend">.*?</div>', html, re.S).group(0)
+
+
+def test_clusters_sharing_one_label_are_told_apart_in_the_deep_dive_table():
+    centre = {
+        "weighted": 500.0,
+        "clusters": [
+            {
+                "label": "Multi-Expert MR Review Design reference",
+                "mixed": False,
+                "runs": 1,
+                "turns": 10,
+                "weighted": 100.0 * (index + 1),
+                "median_turns": 10.0,
+                "tools": {},
+                "confidence": "single run",
+                "first_ts": "2026-08-22T1%d:00:00+00:00" % index,
+            }
+            for index in range(3)
+        ],
+    }
+    names = [row[0] for row in report._cluster_rows(centre)]
+    assert len(set(names)) == 3
+    assert names[0].endswith(" 10:00")
+
+
+def test_a_cluster_with_a_label_of_its_own_keeps_it_whole():
+    centre = {
+        "weighted": 200.0,
+        "clusters": [
+            {
+                "label": label,
+                "mixed": False,
+                "runs": 1,
+                "turns": 10,
+                "weighted": 100.0,
+                "median_turns": 10.0,
+                "tools": {},
+                "confidence": "single run",
+                "first_ts": "2026-08-22T10:00:00+00:00",
+            }
+            for label in ("Collapse the call", "Quantify the fan-out")
+        ],
+    }
+    assert [row[0] for row in report._cluster_rows(centre)] == ["Collapse the call", "Quantify the fan-out"]
+
+
+def test_two_recommendations_clipping_alike_keep_their_differing_tails():
+    import charts
+
+    titles = [
+        "Right-size the Explore agent",
+        "Stop re-reading the same Bash input",
+        "Stop re-reading the same Read input",
+    ]
+    assert charts.distinct_labels(titles, 26) == [
+        "Right-size the Explore...",
+        "...Bash input",
+        "...Read input",
+    ]

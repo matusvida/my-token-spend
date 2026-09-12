@@ -1,5 +1,5 @@
 import html
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 import text
@@ -598,13 +598,28 @@ def _stamp_text(seconds, same_day):
     return moment.strftime("%H:%M") if same_day else moment.strftime("%m-%d %H:%M")
 
 
+def distinct_labels(labels, limit, stamps=None):
+    short = shorten_labels(labels, limit)
+    groups = defaultdict(list)
+    for index, label in enumerate(short):
+        groups[label].append(index)
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+        within = shorten_labels([labels[index] for index in indexes], limit)
+        if len(set(within)) == len(indexes):
+            for index, label in zip(indexes, within):
+                short[index] = label
+        elif stamps:
+            for index in indexes:
+                short[index] = "%s %s" % (short[index], _clock(stamps[index]))
+    return short
+
+
 def run_labels(runs):
-    short = shorten_labels([run["label"] for run in runs], LABEL_CHARS)
-    seen = Counter(short)
-    return [
-        "%s %s" % (label, _clock(run["first_ts"])) if seen[label] > 1 else label
-        for run, label in zip(runs, short)
-    ]
+    return distinct_labels(
+        [run["label"] for run in runs], LABEL_CHARS, [run["first_ts"] for run in runs]
+    )
 
 
 def _runs_by_turns(chart, label_width, row_height):

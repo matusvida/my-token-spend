@@ -1089,15 +1089,19 @@ def _protected_agents(window, recommendations):
     )
 
 
+RECOMMENDATION_LABEL_CHARS = 26
+
+
 def _recommendations_section(window, recommendations):
     if not recommendations:
         return (
             '<section class="card"><h2>Recommendations</h2>'
             '<p class="sub">No rule produced a recommendation above the reporting threshold this window.</p></section>'
         )
+    ranked = sorted(recommendations, key=lambda entry: -figure_of(entry)[0])
     bars = [
         {
-            "label": clip(item["title"], 26),
+            "label": label,
             "value": figure_of(item)[0],
             "tip": "%s\n%s weighted %s (%s of the window)\n%s, %s confidence"
             % (
@@ -1109,7 +1113,9 @@ def _recommendations_section(window, recommendations):
                 item["confidence"],
             ),
         }
-        for item in sorted(recommendations, key=lambda entry: -figure_of(entry)[0])
+        for item, label in zip(
+            ranked, charts.distinct_labels([item["title"] for item in ranked], RECOMMENDATION_LABEL_CHARS)
+        )
     ]
     groups = []
     for key, title, note in GROUP_TITLES:
@@ -1782,16 +1788,25 @@ def _lanes_section(window, analysis, store):
     )
 
 
+CLUSTER_LABEL_CHARS = 100
+
+
 def _cluster_rows(centre):
+    clusters = centre["clusters"]
+    names = charts.distinct_labels(
+        [rootcause.cluster_display(cluster) for cluster in clusters],
+        CLUSTER_LABEL_CHARS,
+        [cluster.get("first_ts") for cluster in clusters],
+    )
     rows = []
-    for cluster in centre["clusters"]:
+    for cluster, name in zip(clusters, names):
         tools = ", ".join(
             "%s %d" % (name, count)
             for name, count in sorted(cluster["tools"].items(), key=lambda kv: (-kv[1], kv[0]))[:4]
         )
         rows.append(
             [
-                rootcause.cluster_display(cluster),
+                name,
                 exact(cluster["runs"]),
                 exact(cluster["turns"]),
                 exact(cluster["weighted"]),
