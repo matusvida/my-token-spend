@@ -516,6 +516,10 @@ def svg_context_series(chart, height=280):
 
 MIN_BAR = 3.0
 
+MIN_MEDIAN_BAR = 6.0
+
+DAY_SECONDS = 86400.0
+
 TICK_MINUTES = (5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880)
 
 
@@ -531,8 +535,10 @@ def timeline_mode(chart, label_width=300):
     if not chart["runs"]:
         return "clock"
     starts, ends, _, span, track = _timeline_extent(chart, label_width)
-    widest = max((end - start) for start, end in zip(starts, ends))
-    return "clock" if widest / span * track >= MIN_BAR else "turns"
+    widths = sorted((end - start) / span * track for start, end in zip(starts, ends))
+    middle = len(widths) // 2
+    median = widths[middle] if len(widths) % 2 else (widths[middle - 1] + widths[middle]) / 2
+    return "clock" if median >= MIN_MEDIAN_BAR else "turns"
 
 
 def _hour_ticks(origin, span):
@@ -545,6 +551,16 @@ def _hour_ticks(origin, span):
     while moment <= origin + span:
         ticks.append(moment)
         moment += seconds
+    return ticks
+
+
+def _day_ticks(origin, span):
+    first = origin - (origin % DAY_SECONDS) + DAY_SECONDS
+    ticks = []
+    moment = first
+    while moment <= origin + span:
+        ticks.append(moment)
+        moment += DAY_SECONDS
     return ticks
 
 
@@ -629,6 +645,12 @@ def svg_run_timeline(chart, label_width=300, row_height=26):
         % (label_width, baseline, label_width + track, baseline)
     )
     same_day = str(min(run["first_ts"] for run in runs))[:10] == str(max(run["last_ts"] for run in runs))[:10]
+    for moment in _day_ticks(origin, span):
+        x = label_width + (moment - origin) / span * track
+        parts.append(
+            '<line class="grid day" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f"/>'
+            % (x, MARGIN["top"] - 10, x, baseline)
+        )
     for moment in _hour_ticks(origin, span):
         x = label_width + (moment - origin) / span * track
         parts.append(

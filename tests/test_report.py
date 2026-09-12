@@ -1405,7 +1405,7 @@ def test_a_timeline_whose_runs_are_all_slivers_falls_back_to_runs_by_turns():
     assert svg.index("job number 3") < svg.index("job number 0")
     html = report._timeline_chart_html(chart)
     assert "Runs by turns, largest first" in html
-    assert "too short to place on the clock" in html
+    assert "too thin to place on the clock" in html
 
 
 def test_a_legend_names_only_the_token_classes_the_bars_actually_draw():
@@ -1605,3 +1605,70 @@ def test_the_context_axis_is_labelled_by_turn_order():
     assert "turn 3 (16:53)" in svg
     html = report._context_chart_html(chart)
     assert "x is turn order, not a clock" in html
+
+
+def test_a_timeline_whose_median_run_is_a_sliver_falls_back_to_runs_by_turns():
+    import charts
+
+    runs = [
+        {
+            "label": "short job %d" % index,
+            "named": True,
+            "first_ts": "2026-09-05T1%d:00:00+00:00" % index,
+            "last_ts": "2026-09-05T1%d:20:00+00:00" % index,
+            "turns": 3 + index,
+            "weighted": 100.0,
+            "agent": "general-purpose",
+        }
+        for index in range(5)
+    ]
+    runs.append(
+        {
+            "label": "the overnight run",
+            "named": True,
+            "first_ts": "2026-09-05T19:43:00+00:00",
+            "last_ts": "2026-09-08T07:40:00+00:00",
+            "turns": 400,
+            "weighted": 900.0,
+            "agent": "general-purpose",
+        }
+    )
+    chart = {
+        "kind": "run_timeline",
+        "runs": runs,
+        "hidden": 0,
+        "overlap": {},
+        "descriptions": {"described": 6, "runs": 6},
+    }
+    assert charts.timeline_mode(chart) == "turns"
+    svg = charts.svg_run_timeline(chart)
+    assert svg.index("the overnight run") < svg.index("short job 4")
+    html = report._timeline_chart_html(chart)
+    assert "most runs are too thin to place on the clock" in html
+
+
+def test_the_run_timeline_marks_day_boundaries_when_it_spans_days():
+    import charts
+
+    runs = [
+        {
+            "label": "job %d" % index,
+            "named": True,
+            "first_ts": "2026-09-0%dT02:00:00+00:00" % (5 + index),
+            "last_ts": "2026-09-0%dT20:00:00+00:00" % (5 + index),
+            "turns": 5,
+            "weighted": 100.0,
+            "agent": "general-purpose",
+        }
+        for index in range(3)
+    ]
+    chart = {
+        "kind": "run_timeline",
+        "runs": runs,
+        "hidden": 0,
+        "overlap": {},
+        "descriptions": {"described": 3, "runs": 3},
+    }
+    assert charts.timeline_mode(chart) == "clock"
+    svg = charts.svg_run_timeline(chart)
+    assert svg.count('class="grid day"') == 2

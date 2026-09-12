@@ -481,6 +481,7 @@ p { margin: 0 0 12px; }
 .chart-wrap { overflow-x: auto; }
 svg.chart { width: 100%; min-width: 620px; height: auto; display: block; }
 .grid { stroke: var(--grid); stroke-width: 1; }
+.grid.day { stroke: var(--baseline); stroke-width: 1.5; }
 .baseline { stroke: var(--baseline); stroke-width: 1; }
 .reference { stroke: var(--baseline); stroke-width: 1; }
 .reference-label, .region-label {
@@ -1453,7 +1454,7 @@ def _context_chart_html(chart):
 
 def _timeline_chart_html(chart):
     if charts.timeline_mode(chart) == "turns":
-        note = "Runs by turns, largest first; every run is too short to place on the clock; %s." % (
+        note = "Runs by turns, largest first; most runs are too thin to place on the clock; %s." % (
             rootcause.description_note_of(chart["descriptions"])
         )
     else:
