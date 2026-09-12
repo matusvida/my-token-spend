@@ -116,20 +116,26 @@ def _mismatch_chart(records, config):
     ranked = sorted({record["model"] for record in turns})
     weight = {model: rules.model_weight(model, config)[0] for model in ranked}
     expensive = sorted(ranked, key=lambda model: (-weight[model], model))[:3]
+    outputs = sorted(record["output"] for record in sampled)
+    axis_max = max(outputs[int(0.95 * (len(outputs) - 1))], 4 * settings["max_output_tokens"])
+    points = [
+        {
+            "tools": len(record["tools"]),
+            "output": record["output"],
+            "thinking": record.get("thinking") or 0,
+            "model": record["model"] if record["model"] in expensive else "other models",
+        }
+        for record in sampled
+        if record["output"] <= axis_max
+    ]
     return {
         "kind": "scatter",
-        "points": [
-            {
-                "tools": len(record["tools"]),
-                "output": record["output"],
-                "thinking": record.get("thinking") or 0,
-                "model": record["model"] if record["model"] in expensive else "other models",
-            }
-            for record in sampled
-        ],
+        "points": points,
         "models": expensive + (["other models"] if len(ranked) > len(expensive) else []),
         "box": {"output": settings["max_output_tokens"], "tools": settings["max_tool_calls"]},
-        "plotted": len(sampled),
+        "axis_max": axis_max,
+        "above_axis": len(sampled) - len(points),
+        "plotted": len(points),
         "total": len(turns),
     }
 
@@ -146,13 +152,20 @@ def _skew_chart(records, finding, config, agent_calls):
             "weighted": cluster["weighted"],
             "runs": cluster["runs"],
             "confidence": cluster["confidence"],
+            "tail": cluster["confidence"] == rootcause.TAIL,
         }
         for cluster in clusters
     ]
     residual = sum(record["weighted"] for record in turns if not record.get(rootcause.RUN_ID_KEY))
     if residual > 0:
         rows.append(
-            {"label": "turns with no run id", "weighted": residual, "runs": 0, "confidence": "residual"}
+            {
+                "label": "turns with no run id",
+                "weighted": residual,
+                "runs": 0,
+                "confidence": "residual",
+                "tail": False,
+            }
         )
     return {
         "kind": "cluster_bars",

@@ -484,14 +484,17 @@ def svg_run_timeline(chart, label_width=300, row_height=26):
         '<line class="baseline" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f"/>'
         % (label_width, baseline, label_width + track, baseline)
     )
-    for fraction, anchor in ((0.0, "start"), (1.0, "end")):
+    first = min(run["first_ts"] for run in runs)
+    final = max(run["last_ts"] for run in runs)
+    same_day = str(first)[:10] == str(final)[:10]
+    for fraction, anchor, stamp in ((0.0, "start", first), (1.0, "end", final)):
         parts.append(
             '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="%s">%s</text>'
             % (
                 label_width + fraction * track,
                 baseline + 18,
                 anchor,
-                esc(_clock(runs[0]["first_ts"] if fraction == 0.0 else max(runs, key=lambda run: run["last_ts"])["last_ts"])),
+                esc(_clock(stamp) if same_day else "%s %s" % (str(stamp)[5:10], _clock(stamp))),
             )
         )
     return _svg(height, "".join(parts))
@@ -504,7 +507,7 @@ def svg_scatter(chart, height=320):
         return ""
     colors = color_map(chart["models"])
     max_tools = max([point["tools"] for point in points] + [chart["box"]["tools"] + 1])
-    ticks = nice_ticks(max([point["output"] for point in points] + [chart["box"]["output"]]))
+    ticks = nice_ticks(max(chart.get("axis_max") or 0, chart["box"]["output"]))
     top_tick = ticks[-1]
     busiest = max([point["thinking"] for point in points] + [1])
     band = width / max(1, max_tools)
@@ -590,7 +593,7 @@ def svg_burn(labels, cumulative, ceiling, reset_label, height=300):
         )
         parts.append(
             '<text class="reference-label" x="%.2f" y="%.2f" text-anchor="end">quota %s</text>'
-            % (PLOT_WIDTH - MARGIN["right"], y - 8, esc(compact(ceiling)))
+            % (PLOT_WIDTH - MARGIN["right"] - 12, y - 8, esc(compact(ceiling)))
         )
     coordinates = " ".join("%.2f,%.2f" % (x_at(index), y_at(value)) for index, value in enumerate(cumulative))
     parts.append('<polyline class="line" points="%s" stroke="var(--series-1)"/>' % coordinates)
@@ -607,7 +610,7 @@ def svg_burn(labels, cumulative, ceiling, reset_label, height=300):
     parts.append('<line class="marker" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f"/>' % (edge, top, edge, top + plot_height))
     parts.append(
         '<text class="reference-label" x="%.2f" y="%.2f" text-anchor="end">%s</text>'
-        % (edge - 6, top + 12, esc(reset_label))
+        % (edge - 6, top + plot_height - 8, esc(reset_label))
     )
     for index, label in enumerate(labels):
         parts.append(

@@ -469,7 +469,10 @@ svg.chart { width: 100%; min-width: 620px; height: auto; display: block; }
 .grid { stroke: var(--grid); stroke-width: 1; }
 .baseline { stroke: var(--baseline); stroke-width: 1; }
 .reference { stroke: var(--baseline); stroke-width: 1; }
-.reference-label { fill: var(--muted); font-size: 11px; }
+.reference-label, .region-label {
+  fill: var(--muted); font-size: 11px;
+  stroke: var(--surface-1); stroke-width: 3px; paint-order: stroke fill;
+}
 .tick, .axis-label, .axis-sublabel, .row-label, .value-label {
   fill: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums;
 }
@@ -546,7 +549,6 @@ ol.actions li { margin-bottom: 10px; }
 .marker { stroke: var(--marker); stroke-width: 1.5; stroke-dasharray: 3 3; }
 .dot { stroke: var(--surface-1); stroke-width: 1.5; }
 .region { fill: var(--grid); fill-opacity: 0.5; stroke: var(--baseline); stroke-dasharray: 4 3; }
-.region-label { fill: var(--muted); font-size: 11px; }
 .finding { scroll-margin-top: 14px; }
 .finding-threshold { font-size: 12px; color: var(--muted); margin: 2px 0 10px; }
 .chart-note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
@@ -1376,11 +1378,21 @@ def _scatter_chart_html(chart):
         exact(chart["plotted"]),
         exact(chart["total"]),
     )
+    if chart.get("above_axis"):
+        note += " %s above the axis top are not drawn." % _plural(chart["above_axis"], "turn")
     return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>" % (
         _legend_of(chart["models"]),
         svg_scatter(chart),
         esc(note),
     )
+
+
+CLUSTER_BARS = 5
+
+
+def _cluster_bar_rows(rows):
+    head = [row for row in rows if not row["tail"] and row["confidence"] != "residual"][:CLUSTER_BARS]
+    return head + [row for row in rows if row["tail"] or row["confidence"] == "residual"]
 
 
 def _cluster_chart_html(chart):
@@ -1392,7 +1404,7 @@ def _cluster_chart_html(chart):
             "tip": "%s\n%s weighted\n%s, %s"
             % (row["label"], exact(row["weighted"]), _plural(row["runs"], "run"), row["confidence"]),
         }
-        for row in chart["rows"][:6]
+        for row in _cluster_bar_rows(chart["rows"])
     ]
     note = rootcause.description_note_of(chart["descriptions"]) + "."
     if chart.get("tail_note"):
@@ -1516,8 +1528,8 @@ def _finding_card(card, window, analysis, store):
     becauses = analysis.get("becauses") or []
     because = becauses[card["index"]] if card["index"] < len(becauses) else None
     tail = (
-        '<p class="chart-note">%d further %s finding(s) are in the raw breakdowns.</p>'
-        % (card["hidden"], RULE_LABELS.get(card["rule"], card["rule"]))
+        '<p class="chart-note">Another %s in the raw breakdowns.</p>'
+        % _plural(card["hidden"], RULE_LABELS.get(card["rule"], card["rule"]) + " finding")
         if card["hidden"]
         else ""
     )
@@ -1595,7 +1607,7 @@ def _round_trip_card(card):
 def _lane_block(lane, total):
     rows = [
         {
-            "label": clip(row["label"], 26),
+            "label": clip(row["label"], 38),
             "value": row["weighted"],
             "tip": "%s\n%s weighted (%s of the window)"
             % (row["label"], exact(row["weighted"]), percent(100.0 * row["weighted"] / total) if total else "-"),
