@@ -1495,15 +1495,17 @@ def _cluster_bar_rows(rows):
 
 
 def _cluster_chart_html(chart):
+    drawn = _cluster_bar_rows(chart["rows"])
+    short = charts.shorten_labels([row["label"] for row in drawn], charts.LABEL_CHARS)
     rows = [
         {
-            "label": charts.clip_label(row["label"], charts.LABEL_CHARS, row["derived"]),
+            "label": label,
             "value": row["weighted"],
             "color": charts.OTHER if row["confidence"] == "residual" or row["derived"] else "--series-1",
             "tip": "%s\n%s weighted\n%s, %s"
             % (row["label"], exact(row["weighted"]), _plural(row["runs"], "run"), row["confidence"]),
         }
-        for row in _cluster_bar_rows(chart["rows"])
+        for row, label in zip(drawn, short)
     ]
     note = rootcause.description_note_of(chart["descriptions"]) + "."
     if chart.get("tail_note"):
@@ -1716,15 +1718,16 @@ def _lane_block(lane, total):
             ("label derived from tools", charts.OTHER, any(row.get("derived") for row in lane["rows"])),
         ]
     )
+    short = charts.shorten_labels([row["label"] for row in lane["rows"]], 38)
     rows = [
         {
-            "label": charts.clip_label(row["label"], 38, row.get("derived")),
+            "label": label,
             "value": row["weighted"],
             "color": charts.OTHER if row.get("derived") else "--series-1",
             "tip": "%s\n%s weighted (%s of the window)"
             % (row["label"], exact(row["weighted"]), percent(100.0 * row["weighted"] / total) if total else "-"),
         }
-        for row in lane["rows"]
+        for row, label in zip(lane["rows"], short)
     ]
     if not rows:
         return '<div class="lane"><h3>%s</h3><p class="chart-note">%s</p></div>' % (

@@ -1328,17 +1328,44 @@ def test_a_cluster_list_states_how_many_runs_a_description_was_recovered_for():
     assert "descriptions recovered for 50% of runs" in drill
 
 
-def test_a_derived_label_is_truncated_from_the_front_so_the_tail_distinguishes_it():
+def test_labels_that_share_a_prefix_lose_it_so_the_tail_distinguishes_them():
     import charts
 
-    long_label = "shell commands with file writes in product-promotion-service on cti-12375-fv-promo-job"
-    front = charts.clip_label(long_label, charts.LABEL_CHARS, derived=True)
-    assert front.startswith("...")
-    assert front.endswith("cti-12375-fv-promo-job")
-    assert len(front) == charts.LABEL_CHARS
-    named = charts.clip_label(long_label, charts.LABEL_CHARS, derived=False)
-    assert named.startswith("shell commands")
-    assert named.endswith("...")
+    shortened = charts.shorten_labels(
+        [
+            "shell commands with file writes in product-promotion-service on cti-12375-promo",
+            "shell commands with file writes in workspace on HEAD",
+            "shell commands with file writes in srst-service on CTI-12629",
+        ],
+        charts.LABEL_CHARS,
+    )
+    assert len(set(shortened)) == 3
+    assert all(label.startswith("...") for label in shortened)
+    assert shortened[1] == "...workspace on HEAD"
+
+
+def test_labels_that_share_a_suffix_lose_it_so_the_head_distinguishes_them():
+    import charts
+
+    shortened = charts.shorten_labels(
+        [
+            "shell commands with file writes in product-promotion-service on cti-12375-promo",
+            "file reads and searches in product-promotion-service on cti-12375-promo",
+            "file writes plus dbqt MCP calls in product-promotion-service on cti-12375-promo",
+        ],
+        charts.LABEL_CHARS,
+    )
+    assert len(set(shortened)) == 3
+    assert shortened[1] == "file reads and searches..."
+
+
+def test_labels_sharing_nothing_are_left_alone_apart_from_the_cap():
+    import charts
+
+    assert charts.shorten_labels(["Collapse the call", "Quantify the fan-out"], 46) == [
+        "Collapse the call",
+        "Quantify the fan-out",
+    ]
 
 
 def _timeline(minutes, span_days):

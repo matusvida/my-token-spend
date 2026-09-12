@@ -6,12 +6,50 @@ def clip(text, limit):
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
-def clip_front(text, limit):
-    return text if len(text) <= limit else "..." + text[-(limit - 3) :].lstrip()
+MIN_AFFIX = 10
+
+MIN_REMAINDER = 4
 
 
-def clip_label(text, limit, derived=False):
-    return clip_front(text, limit) if derived else clip(text, limit)
+def _shared_prefix(labels):
+    first = labels[0]
+    count = 0
+    for index, char in enumerate(first):
+        if all(len(label) > index and label[index] == char for label in labels):
+            count = index + 1
+        else:
+            break
+    return first[:count].rsplit(" ", 1)[0] + " " if " " in first[:count] else ""
+
+
+def _shared_suffix(labels):
+    first = labels[0]
+    count = 0
+    for index in range(1, len(first) + 1):
+        char = first[-index]
+        if all(len(label) >= index and label[-index] == char for label in labels):
+            count = index
+        else:
+            break
+    tail = first[len(first) - count :]
+    return " " + tail.split(" ", 1)[1] if " " in tail else ""
+
+
+def shorten_labels(labels, limit):
+    if len(labels) < 2:
+        return [clip(label, limit) for label in labels]
+    prefix = _shared_prefix(labels)
+    if len(prefix) < MIN_AFFIX or any(len(label) - len(prefix) < MIN_REMAINDER for label in labels):
+        prefix = ""
+    trimmed = [label[len(prefix) :] for label in labels]
+    suffix = _shared_suffix(trimmed)
+    if len(suffix) < MIN_AFFIX or any(len(label) - len(suffix) < MIN_REMAINDER for label in trimmed):
+        suffix = ""
+    trimmed = [label[: len(label) - len(suffix)] if suffix else label for label in trimmed]
+    lead = "..." if prefix else ""
+    trail = "..." if suffix else ""
+    room = limit - len(lead) - len(trail)
+    return [lead + clip(label, room) + trail for label in trimmed]
 
 
 def compact(value):
@@ -491,9 +529,11 @@ def _stamp_text(seconds, same_day):
 
 
 def _runs_by_turns(chart, label_width, row_height):
+    ordered = sorted(chart["runs"], key=lambda run: (-run["turns"], run["first_ts"]))
+    short = shorten_labels([run["label"] for run in ordered], LABEL_CHARS)
     rows = [
         {
-            "label": clip_label(run["label"], LABEL_CHARS, not run["named"]),
+            "label": label,
             "value": run["turns"],
             "color": "--series-1" if run["named"] else OTHER,
             "tip": "%s\n%s to %s\n%d turns, %s weighted\nagent type %s"
@@ -506,7 +546,7 @@ def _runs_by_turns(chart, label_width, row_height):
                 run["agent"],
             ),
         }
-        for run in sorted(chart["runs"], key=lambda run: (-run["turns"], run["first_ts"]))
+        for run, label in zip(ordered, short)
     ]
     return svg_ranked_bars(rows, label_width=label_width, row_height=row_height + 6)
 
@@ -520,6 +560,7 @@ def svg_run_timeline(chart, label_width=300, row_height=26):
     height = MARGIN["top"] + row_height * len(runs) + 44
     starts, ends, origin, span, track = _timeline_extent(chart, label_width)
     busiest = max(run["turns"] for run in runs)
+    short = shorten_labels([run["label"] for run in runs], LABEL_CHARS)
     parts = []
     for index, run in enumerate(runs):
         thickness = 6.0 + 12.0 * (run["turns"] / busiest if busiest else 0.0)
@@ -528,7 +569,7 @@ def svg_run_timeline(chart, label_width=300, row_height=26):
         length = max(MIN_BAR, (ends[index] - starts[index]) / span * track)
         parts.append(
             '<text class="row-label" x="%d" y="%.2f" text-anchor="end">%s</text>'
-            % (label_width - 12, y + thickness / 2 + 4, esc(clip_label(run["label"], LABEL_CHARS, not run["named"])))
+            % (label_width - 12, y + thickness / 2 + 4, esc(short[index]))
         )
         parts.append(
             '<path class="mark" d="%s" fill="var(%s)" tabindex="0" data-tip="%s"/>'
