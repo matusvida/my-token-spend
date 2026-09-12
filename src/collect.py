@@ -905,7 +905,29 @@ def _fill_tool_results(stores, pending_results):
                     tool.update(outcome)
 
 
-def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_from_transcripts_only=False):
+def boundary_drift(stores, config, instants):
+    if not instants:
+        return None
+    moved, windows = 0, set()
+    for start, bucket in stores.items():
+        for record in bucket.values():
+            if window_start(parse_ts(record["ts"]), config, instants).isoformat() != start:
+                moved += 1
+                windows.add(window_key(date.fromisoformat(start)))
+    if not moved:
+        return None
+    return {"records": moved, "windows": sorted(windows)}
+
+
+def _poll_quota(quota_poll, data_dir, windows, config, instants):
+    if quota_poll is None:
+        return {"sample": None, "skipped": "quota polling was not enabled for this run"}
+    key = window_start(datetime.now(timezone.utc), config, instants).isoformat()
+    weighted = sum(record["weighted"] for record in windows.get(key) or [])
+    return quota_poll(data_dir, weighted)
+
+
+def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_from_transcripts_only=False, quota_poll=None):
     root, out_dir, state_path = Path(root), Path(out_dir), Path(state_path)
     data_dir, reports_dir, store_dir = _prepare_dirs(out_dir)
     backfill = backfill or rebuild_from_transcripts_only
@@ -960,6 +982,8 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     _write_json(state_path, state)
     return {
         "windows": written,
+        "quota": _poll_quota(quota_poll, data_dir, windows, config, instants),
+        "boundary_changed": boundary_drift(known, config, instants),
         "new_records": len(fresh),
         "total_records": sum(len(r) for r in windows.values()),
         "files_scanned": len(files),

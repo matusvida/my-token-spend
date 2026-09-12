@@ -189,3 +189,112 @@ def test_collect_without_samples_cuts_on_the_configured_fallback(tmp_path):
     assert [p.stem for p in (out / "data" / "records").glob("week_*.jsonl")] == ["week_2026_09_19"]
     stored = json.loads((out / "data" / "week_2026_09_19.json").read_text(encoding="utf-8"))
     assert stored["window"]["boundary_source"] == "config"
+
+
+def write_sample(out, resets_at, **kwargs):
+    (out / "data").mkdir(parents=True, exist_ok=True)
+    with quota.samples_path(out / "data").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(sample(resets_at, **kwargs)) + "\n")
+
+
+def test_collect_polls_the_quota_with_the_current_window_spend(tmp_path):
+    out = tmp_path / "out"
+    now = datetime.now(timezone.utc)
+    root = transcript(tmp_path / "projects", now.isoformat(), (now - timedelta(days=30)).isoformat())
+    seen = {}
+
+    def fake_poll(data_dir, weighted_so_far):
+        seen["data_dir"], seen["weighted"] = Path(data_dir), weighted_so_far
+        return {"sample": {"seven_day_pct": 3.0}, "skipped": None}
+
+    summary = collect.run(CONFIG, root, out, out / "state.json", quota_poll=fake_poll)
+    assert summary["quota"]["sample"]["seven_day_pct"] == 3.0
+    assert seen["data_dir"] == out / "data"
+    current = collect.window_key(collect.window_start(now, CONFIG, None))
+    stored = json.loads((out / "data" / (current + ".json")).read_text(encoding="utf-8"))
+    assert seen["weighted"] == stored["totals"]["weighted"]
+    assert seen["weighted"] > 0.0
+
+
+def test_collect_without_a_poll_says_so_and_still_finishes(tmp_path):
+    out = tmp_path / "out"
+    root = transcript(tmp_path / "projects", "2026-09-19T04:00:00.000Z")
+    summary = collect.run(CONFIG, root, out, out / "state.json")
+    assert summary["quota"]["sample"] is None
+    assert "not enabled" in summary["quota"]["skipped"]
+    assert summary["total_records"] == 1
+
+
+def test_a_failing_poll_never_stops_the_collector(tmp_path):
+    out = tmp_path / "out"
+    root = transcript(tmp_path / "projects", "2026-09-19T04:00:00.000Z")
+    summary = collect.run(
+        CONFIG,
+        root,
+        out,
+        out / "state.json",
+        quota_poll=lambda data_dir, weighted: {"sample": None, "skipped": "the usage endpoint answered 401"},
+    )
+    assert summary["total_records"] == 1
+    assert summary["quota"]["skipped"].endswith("401")
+
+
+def test_the_first_sample_after_a_boundary_change_asks_for_a_recut(tmp_path):
+    out = tmp_path / "out"
+    root = transcript(tmp_path / "projects", "2026-09-19T02:00:00.000Z")
+    first = collect.run(CONFIG, root, out, out / "state.json")
+    assert first["boundary_changed"] is None
+
+    write_sample(out, "2026-09-19T03:00:00.046991+00:00")
+    second = collect.run(CONFIG, root, out, out / "state.json")
+    assert second["boundary_changed"]["records"] == 1
+    assert second["boundary_changed"]["windows"] == ["week_2026_09_19"]
+
+    collect.recut(CONFIG, out, out / "state.json")
+    third = collect.run(CONFIG, root, out, out / "state.json")
+    assert third["boundary_changed"] is None
+
+
+def test_a_boundary_that_matches_the_store_stays_quiet(tmp_path):
+    out = tmp_path / "out"
+    write_sample(out, "2026-09-19T03:00:00.046991+00:00")
+    root = transcript(tmp_path / "projects", "2026-09-19T04:00:00.000Z")
+    collect.run(CONFIG, root, out, out / "state.json")
+    assert collect.run(CONFIG, root, out, out / "state.json")["boundary_changed"] is None
+
+
+def test_recut_rebuckets_the_agent_calls_too(tmp_path):
+    out = tmp_path / "out"
+    root = tmp_path / "projects"
+    root.mkdir(parents=True)
+    (root / "a.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "u0",
+                "timestamp": "2026-09-19T02:00:00.000Z",
+                "sessionId": "s1",
+                "message": {
+                    "model": "claude-sonnet-5",
+                    "usage": {"input_tokens": 10, "output_tokens": 10},
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "Agent",
+                            "input": {"description": "check the thing", "prompt": "do it"},
+                        }
+                    ],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    collect.run(CONFIG, root, out, out / "state.json")
+    store = out / "data" / "records"
+    assert [p.name for p in store.glob("agent_calls_*.jsonl")] == ["agent_calls_week_2026_09_19.jsonl"]
+
+    write_sample(out, "2026-09-19T03:00:00.046991+00:00")
+    collect.recut(CONFIG, out, out / "state.json")
+    assert [p.name for p in store.glob("agent_calls_*.jsonl")] == ["agent_calls_week_2026_09_12.jsonl"]

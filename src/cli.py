@@ -80,6 +80,7 @@ def window_totals(data_dir):
 
 def cmd_collect(args):
     import collect
+    import quota
 
     home = paths.ensure_home()
     config = load_config(home)
@@ -114,6 +115,7 @@ def cmd_collect(args):
                 backfill=args.backfill,
                 window=args.window,
                 rebuild_from_transcripts_only=args.rebuild_from_transcripts_only,
+                quota_poll=quota.poll,
             )
     except collect.CollectionError as error:
         raise CliError(str(error))
@@ -158,6 +160,18 @@ def cmd_collect(args):
             % (drift["window"], drift["records"]),
             file=sys.stderr,
         )
+
+    drift = summary.get("boundary_changed")
+    if drift:
+        print(
+            "WINDOW BOUNDARY CHANGED: %d stored record(s) across %s belong to a different window under the "
+            "reset instant Anthropic reports; re-cut every window with: collect --recut-windows"
+            % (drift["records"], ", ".join(drift["windows"])),
+            file=sys.stderr,
+        )
+    skipped = (summary.get("quota") or {}).get("skipped")
+    if skipped:
+        print("quota sample skipped: %s" % skipped, file=sys.stderr)
 
     print("data home : %s  (%s)" % (home, paths.data_home_source()))
     print(
