@@ -4,6 +4,7 @@ from datetime import datetime
 from statistics import median
 
 import rules
+import text
 
 
 SHELL = "shell"
@@ -510,7 +511,7 @@ def overlap(runs):
 
 
 def _plural(count, word):
-    return "%d %s%s" % (count, word, "" if count == 1 else "s")
+    return text.plural(count, word)
 
 
 def _num(value):

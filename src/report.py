@@ -17,6 +17,7 @@ import cost
 import evidence
 import paths
 import rootcause
+import text
 from charts import (
     clip,
     compact,
@@ -1614,7 +1615,7 @@ CHART_HTML = {
 
 
 def _plural(count, word):
-    return "%d %s%s" % (count, word, "" if count == 1 else "s")
+    return text.plural(count, word)
 
 
 def _claim(card, window):
