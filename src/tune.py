@@ -496,7 +496,7 @@ def _builtin_entry(centre, window_data, config, settings_map, setting, buys):
 
 
 def _upgrade_entry(
-    centre, path, text, roots, declared, description, window_data, config, headroom
+    centre, path, text, roots, declared, description, window_data, config, settings_map, headroom
 ):
     pricing = window_data.get("weights", config)
     families = rules.family_weights(pricing)
@@ -507,19 +507,30 @@ def _upgrade_entry(
         if current and target and target > current
         else None
     )
-    if cost is None or cost > headroom:
+    thin = centre["windows_present"] < settings_map["min_windows_for_proposal"]
+    if cost is None or cost <= 0 or cost > headroom or thin:
+        if thin:
+            reason = "it ran in %d of %d analysed windows, below the %d-window floor for a config change" % (
+                centre["windows_present"],
+                centre["windows_analysed"],
+                settings_map["min_windows_for_proposal"],
+            )
+        elif cost is None:
+            reason = "this data cannot price the move"
+        elif cost <= 0:
+            reason = "its typical window cost is nothing, so there is nothing to price"
+        else:
+            reason = "the move would cost about %s weighted tokens per window against the %s the analysed windows left unused" % (
+                _num(cost),
+                _num(headroom),
+            )
         return _entry(
             centre,
             ALREADY_RIGHT_SIZED,
             files=[str(path)],
             buys=description,
-            note="the definition asks for `model: %s`. Moving it to %s would cost about %s weighted tokens per window, and the analysed windows left %s unused, so no upgrade is proposed."
-            % (
-                declared,
-                advice.UPGRADE_FAMILY,
-                _num(cost) if cost is not None else "an amount this data cannot price",
-                _num(headroom),
-            ),
+            note="the definition asks for `model: %s` and no upgrade is proposed: %s."
+            % (declared, reason),
             performance_risk="none",
             quality_risk="No change proposed, so no quality risk.",
         )
@@ -603,7 +614,16 @@ def _agent_entry(centre, roots, window_data, config, settings_map, windows, sett
     if declared and _model_family(declared) in set(settings_map["cheap_model_families"]):
         if name in opus_class and headroom > 0:
             return _upgrade_entry(
-                centre, path, text, roots, declared, description or buys, window_data, config, headroom
+                centre,
+                path,
+                text,
+                roots,
+                declared,
+                description or buys,
+                window_data,
+                config,
+                settings_map,
+                headroom,
             )
         return _entry(
             centre,

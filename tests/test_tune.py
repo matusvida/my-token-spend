@@ -388,7 +388,18 @@ def test_an_upgrade_bigger_than_the_unused_quota_is_not_offered(home):
     )
     entry = entry_for(result, "deep-reviewer")
     assert entry["status"] == tune.ALREADY_RIGHT_SIZED
-    assert "left 1,000 unused" in entry["note"]
+    assert "against the 1,000 the analysed windows left unused" in entry["note"]
+
+
+def test_an_agent_that_ran_in_too_few_windows_is_not_offered_an_upgrade(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    windows = four_windows([0, 0, 0, 0])
+    windows[-1]["by_agent"] = [{"key": "deep-reviewer", "turns": 40, "weighted": 20000000.0}]
+    windows[-1]["findings_by_rule"] = {"headroom": {"count": 1, "weighted_cost": 400000000.0}}
+    result = tune.build(windows, opus_config(["deep-reviewer"]), roots=roots_for(home), now=NOW)
+    entry = entry_for(result, "deep-reviewer")
+    assert entry["status"] == tune.ALREADY_RIGHT_SIZED
+    assert "1 of 4" in entry["note"]
 
 
 def test_a_cheap_agent_on_neither_list_is_not_assessable(home):
