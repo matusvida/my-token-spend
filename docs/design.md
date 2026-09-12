@@ -314,9 +314,15 @@ and the turn count behind the repeat. A builder that cannot ground its line in t
 `None`, and the page says so rather than guessing.
 
 **Clustering key.** Runs are grouped by `agentId` (skills by `sessionId`, since a skill has no
-invocation id). A run is joined to the `Agent` call that dispatched it through `source_tool_use_id`,
-which gives it the description the orchestrator wrote, the model it asked for and the size of the
-prompt it was given. Runs that carry a description cluster on the description alone; the rest
+invocation id). A run is joined to the `Agent` call that dispatched it on the dispatch prompt: the
+session id plus the first 200 characters of the run's first stored prompt, whitespace-collapsed and
+stripped of a leading `<teammate-message>` envelope, matched against the same normalisation of the
+call's `prompt_head`. Nothing on a subagent turn carries the dispatching call's id, so the prompt is
+the only link the transcripts offer; a prompt shorter than 40 normalised characters is not specific
+enough to join on and joins nothing. When one prompt was dispatched more than once in a session, the
+latest call at or before the run's first turn wins, which is the retry rather than the original. The
+join gives the run the description the orchestrator wrote, the model it asked for and the size of
+the prompt it was given. Measured here: 90 of 123 runs in `week_2026_09_05`. Runs that carry a description cluster on the description alone; the rest
 cluster on **tool mix, working directory, branch and agent type** — the fields every turn carries in
 full. `prompt` is deliberately *not* a clustering input: it is stored
 truncated at `prompt_label_chars` and often begins with skill boilerplate. It is used only as a
@@ -639,9 +645,13 @@ is_api_error, prompt`.
 
 `cache_create_5m` and `cache_create_1h` split `cache_create`, which stays their
 sum and stays priced at one flat weight. `after_compaction` marks the turn that
-follows a compact summary. `source_tool_use_id` is the Agent call that spawned a
-subagent transcript, taken from the first user entry of that file which carries
-one and stamped on every turn of it.
+follows a compact summary. `source_tool_use_id` is the transcript's first
+`sourceToolUseID`: the tool call whose result produced that user entry, stamped
+on every turn of the file. It is **not** the Agent call that spawned a subagent.
+Measured over 623 subagent transcripts here, not one of their `sourceToolUseID`
+values is an `Agent` tool_use id; every one observed points at a `Skill` call
+inside the subagent itself. The field is stored because it is real, and nothing
+joins on it.
 
 A tool call's outcome is joined onto it from the `tool_result` block that names
 its `tool_use_id`, within the same transcript file and in the same pass. Results

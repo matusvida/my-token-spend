@@ -177,7 +177,8 @@ def group_runs(records, key=RUN_ID_KEY, label_chars=90, agent_calls=None):
         identity = record.get(key)
         if identity:
             grouped[identity].append(record)
-    runs = [_describe_run(identity, turns, label_chars, agent_calls or {}) for identity, turns in grouped.items()]
+    dispatches = dispatch_index(agent_calls)
+    runs = [_describe_run(identity, turns, label_chars, dispatches) for identity, turns in grouped.items()]
     runs.sort(key=lambda run: (-run["weighted"], run["id"]))
     return runs
 
@@ -195,14 +196,37 @@ def description_note(runs):
     return description_note_of(description_coverage(runs))
 
 
-def _dispatch_of(turns, agent_calls):
-    if not agent_calls:
+TEAMMATE_TAG = re.compile(r"^\s*<teammate-message[^>]*>\s*", re.S)
+DISPATCH_KEY_CHARS = 200
+DISPATCH_KEY_MIN = 40
+
+
+def _dispatch_key(session, prompt):
+    text = " ".join(TEAMMATE_TAG.sub("", str(prompt or "")).split())[:DISPATCH_KEY_CHARS]
+    return (session, text) if len(text) >= DISPATCH_KEY_MIN else None
+
+
+def dispatch_index(agent_calls):
+    index = defaultdict(list)
+    for call in (agent_calls or {}).values():
+        key = _dispatch_key(call.get("sessionId"), call.get("prompt_head"))
+        if key:
+            index[key].append(call)
+    for calls in index.values():
+        calls.sort(key=lambda call: call.get("ts") or "")
+    return index
+
+
+def _dispatch_of(turns, index):
+    key = _dispatch_key(turns[0].get("sessionId"), turns[0].get("prompt"))
+    candidates = index.get(key) if key else None
+    if not candidates:
         return {}
-    source, _ = _modal(record.get("source_tool_use_id") for record in turns)
-    return agent_calls.get(source) or {}
+    earlier = [call for call in candidates if (call.get("ts") or "") <= turns[0]["ts"]]
+    return earlier[-1] if earlier else candidates[0]
 
 
-def _describe_run(identity, turns, label_chars, agent_calls=None):
+def _describe_run(identity, turns, label_chars, dispatches=None):
     turns = sorted(turns, key=lambda record: (record["ts"], record.get("uuid") or ""))
     tools = tool_counts(turns)
     categories = category_counts(tools)
@@ -211,7 +235,7 @@ def _describe_run(identity, turns, label_chars, agent_calls=None):
     agent, agent_mixed = _modal(record.get("attributionAgent") for record in turns)
     skill, _ = _modal(record.get("attributionSkill") for record in turns)
     session, _ = _modal(record.get("sessionId") for record in turns)
-    dispatch = _dispatch_of(turns, agent_calls)
+    dispatch = _dispatch_of(turns, dispatches or {})
     return {
         "id": identity,
         "description": dispatch.get("description"),

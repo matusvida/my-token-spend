@@ -1288,13 +1288,17 @@ def test_a_cluster_list_states_how_many_runs_a_description_was_recovered_for():
 
     window, records = storm_window()
     for index, record in enumerate(records):
-        record["source_tool_use_id"] = "toolu_1" if index < 12 else None
+        if index >= 12:
+            record["prompt"] = "a different job entirely: audit the courier settlement export"
     calls = {
         "toolu_1": {
             "tool_use_id": "toolu_1",
+            "ts": "2026-08-24T09:00:00+00:00",
+            "sessionId": records[0]["sessionId"],
             "description": "Rebase the pricing branch",
             "model": "opus",
             "prompt_chars": 400,
+            "prompt_head": records[0]["prompt"],
         }
     }
     analysis = rootcause.analyse(window, records, CONFIG, calls)

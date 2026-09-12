@@ -454,59 +454,97 @@ def test_no_because_line_asserts_a_motive_or_calls_a_cost_wasteful():
             assert phrase not in text, "%r appeared in %r" % (phrase, text)
 
 
-def _dispatch(call_id, description, model="opus", prompt_chars=900):
+PROMPT_A = "Implement section two of the spec and only that section, touching nothing else at all"
+PROMPT_B = "Review the merge request for the pricing service and report every finding you can see"
+
+
+def _dispatch(call_id, description, prompt=PROMPT_A, model="opus", session="s1", at=ts(0)):
     return {
         "tool_use_id": call_id,
-        "ts": ts(0),
-        "sessionId": "s1",
+        "ts": at,
+        "sessionId": session,
         "parent_uuid": "p1",
         "description": description,
         "subagent_type": "general-purpose",
         "model": model,
-        "prompt_chars": prompt_chars,
-        "prompt_head": description,
+        "prompt_chars": 900,
+        "prompt_head": prompt,
     }
 
 
 def _dispatched_records(pairs):
     records = []
-    for index, (run_id, call_id) in enumerate(pairs):
+    for index, (run_id, prompt) in enumerate(pairs):
         for turn in range(3):
-            record = rec(
-                ts(turn, hour=10 + index),
-                sidechain=True,
-                run=run_id,
-                agent="general-purpose",
-                tools=(("Bash", "h%d%d" % (index, turn)),),
-                output=10,
-                prompt="do a thing",
-                uuid="u%d%d" % (index, turn),
+            records.append(
+                rec(
+                    ts(turn, hour=10 + index),
+                    sidechain=True,
+                    run=run_id,
+                    agent="general-purpose",
+                    tools=(("Bash", "h%d%d" % (index, turn)),),
+                    output=10,
+                    prompt=prompt,
+                    uuid="u%d%d" % (index, turn),
+                )
             )
-            record["source_tool_use_id"] = call_id
-            records.append(record)
     return records
 
 
+def _calls(*dispatches):
+    return {call["tool_use_id"]: call for call in dispatches}
+
+
 def test_a_run_carries_the_description_of_the_call_that_dispatched_it():
-    calls = {"toolu_1": _dispatch("toolu_1", "Implement section 2")}
-    run = rootcause.group_runs(_dispatched_records([("r0", "toolu_1")]), agent_calls=calls)[0]
+    calls = _calls(_dispatch("toolu_1", "Implement section 2"))
+    run = rootcause.group_runs(_dispatched_records([("r0", PROMPT_A)]), agent_calls=calls)[0]
     assert run["description"] == "Implement section 2"
     assert run["requested_model"] == "opus"
     assert run["prompt_chars"] == 900
 
 
 def test_a_run_with_no_matching_dispatch_carries_no_description():
-    run = rootcause.group_runs(_dispatched_records([("r0", "toolu_missing")]), agent_calls={})[0]
+    calls = _calls(_dispatch("toolu_1", "Implement section 2"))
+    run = rootcause.group_runs(_dispatched_records([("r0", PROMPT_B)]), agent_calls=calls)[0]
     assert run["description"] is None
     assert run["requested_model"] is None
 
 
+def test_a_dispatch_from_another_session_is_not_joined():
+    calls = _calls(_dispatch("toolu_1", "Implement section 2", session="other"))
+    run = rootcause.group_runs(_dispatched_records([("r0", PROMPT_A)]), agent_calls=calls)[0]
+    assert run["description"] is None
+
+
+def test_the_teammate_envelope_around_a_prompt_does_not_break_the_join():
+    calls = _calls(_dispatch("toolu_1", "Implement section 2"))
+    wrapped = '<teammate-message teammate_id="team-lead" summary="x">\n' + PROMPT_A
+    run = rootcause.group_runs(_dispatched_records([("r0", wrapped)]), agent_calls=calls)[0]
+    assert run["description"] == "Implement section 2"
+
+
+def test_a_prompt_too_short_to_identify_a_job_joins_nothing():
+    calls = _calls(_dispatch("toolu_1", "Implement section 2", prompt="go"))
+    run = rootcause.group_runs(_dispatched_records([("r0", "go")]), agent_calls=calls)[0]
+    assert run["description"] is None
+
+
+def test_two_dispatches_of_the_same_prompt_resolve_to_the_latest_one_before_the_run():
+    calls = _calls(
+        _dispatch("toolu_1", "First attempt", at=ts(0, hour=9)),
+        _dispatch("toolu_2", "Retry", at=ts(0, hour=10)),
+        _dispatch("toolu_3", "Much later", at=ts(0, hour=20)),
+    )
+    run = rootcause.group_runs(_dispatched_records([("r0", PROMPT_A)]), agent_calls=calls)[0]
+    assert run["description"] == "Retry"
+
+
 def test_runs_with_the_same_description_cluster_together_whatever_their_tools():
-    calls = {
-        "toolu_1": _dispatch("toolu_1", "Review the merge request"),
-        "toolu_2": _dispatch("toolu_2", "Review the merge request"),
-    }
-    records = _dispatched_records([("r0", "toolu_1"), ("r1", "toolu_2")])
+    calls = _calls(
+        _dispatch("toolu_1", "Review the merge request"),
+        _dispatch("toolu_2", "Review the merge request", prompt=PROMPT_B),
+    )
+    records = _dispatched_records([("r0", PROMPT_A), ("r1", PROMPT_B)])
     clusters = rootcause.cluster_runs(rootcause.group_runs(records, agent_calls=calls))
     assert len(clusters) == 1
     assert clusters[0]["label"] == "Review the merge request"
@@ -515,24 +553,24 @@ def test_runs_with_the_same_description_cluster_together_whatever_their_tools():
 
 
 def test_a_cluster_whose_runs_all_carry_a_description_is_named():
-    calls = {"toolu_1": _dispatch("toolu_1", "Review the merge request")}
+    calls = _calls(_dispatch("toolu_1", "Review the merge request"))
     clusters = rootcause.cluster_runs(
-        rootcause.group_runs(_dispatched_records([("r0", "toolu_1")]), agent_calls=calls)
+        rootcause.group_runs(_dispatched_records([("r0", PROMPT_A)]), agent_calls=calls)
     )
     assert clusters[0]["confidence"] == "named"
 
 
-def test_a_run_without_a_description_still_falls_back_to_the_derived_label():
-    calls = {"toolu_1": _dispatch("toolu_1", "Review the merge request")}
-    records = _dispatched_records([("r0", "toolu_1"), ("r1", "toolu_missing")])
+def test_a_run_without_a_description_still_falls_back_to_the_old_labelling():
+    calls = _calls(_dispatch("toolu_1", "Review the merge request"))
+    records = _dispatched_records([("r0", PROMPT_A), ("r1", "Base directory for this skill: C:")])
     clusters = rootcause.cluster_runs(rootcause.group_runs(records, agent_calls=calls))
-    labels = sorted(cluster["label"] for cluster in clusters)
-    assert "Review the merge request" in labels
-    assert any(cluster["label_source"] == "derived" for cluster in clusters)
+    by_source = {cluster["label_source"]: cluster["label"] for cluster in clusters}
+    assert by_source["description"] == "Review the merge request"
+    assert by_source["derived"] == "shell commands in srst on master"
 
 
 def test_a_cluster_list_states_how_many_runs_a_description_was_recovered_for():
-    calls = {"toolu_1": _dispatch("toolu_1", "Review the merge request")}
-    runs = rootcause.group_runs(_dispatched_records([("r0", "toolu_1"), ("r1", "toolu_missing")]), agent_calls=calls)
+    calls = _calls(_dispatch("toolu_1", "Review the merge request"))
+    runs = rootcause.group_runs(_dispatched_records([("r0", PROMPT_A), ("r1", PROMPT_B)]), agent_calls=calls)
     assert rootcause.description_coverage(runs) == {"described": 1, "runs": 2, "share": 0.5}
     assert rootcause.description_note(runs) == "descriptions recovered for 50% of runs"
