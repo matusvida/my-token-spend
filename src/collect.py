@@ -123,6 +123,40 @@ def _tool_hash(name, tool_input):
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
+AGENT_TOOL = "Agent"
+
+
+def agent_calls(entry, config):
+    if entry.get("type") != "assistant":
+        return []
+    content = (entry.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return []
+    limit = config["prompt_label_chars"]
+    calls = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        if block.get("name") != AGENT_TOOL or not block.get("id"):
+            continue
+        payload = block.get("input") if isinstance(block.get("input"), dict) else {}
+        prompt = payload.get("prompt") or ""
+        calls.append(
+            {
+                "tool_use_id": block["id"],
+                "ts": parse_ts(entry["timestamp"]).isoformat(),
+                "sessionId": entry.get("sessionId"),
+                "parent_uuid": entry.get("uuid"),
+                "description": payload.get("description"),
+                "subagent_type": payload.get("subagent_type"),
+                "model": payload.get("model"),
+                "prompt_chars": len(prompt),
+                "prompt_head": prompt[:limit] or None,
+            }
+        )
+    return calls
+
+
 def _optional_int(value):
     return None if value is None else int(value)
 
@@ -256,6 +290,7 @@ def read_file(path, config, stored):
             "malformed": 0,
             "reset_candidates": [],
             "pending_results": {},
+            "agent_calls": [],
         }
 
     resume = bool(stored) and size > stored["size"]
@@ -281,6 +316,7 @@ def read_file(path, config, stored):
     reset_candidates = set()
     awaiting = {}
     pending_results = {}
+    calls = []
     limit = config["prompt_label_chars"]
     for chunk in chunks:
         consumed += len(chunk) + 1
@@ -313,6 +349,7 @@ def read_file(path, config, stored):
                 else:
                     tool.update(outcome)
             continue
+        calls.extend(agent_calls(entry, config))
         record = normalize(entry, config)
         if record is not None:
             record["prompt"] = last_prompt
@@ -341,6 +378,7 @@ def read_file(path, config, stored):
         "malformed": malformed,
         "reset_candidates": sorted(reset_candidates),
         "pending_results": pending_results,
+        "agent_calls": calls,
     }
 
 
@@ -813,6 +851,47 @@ def reprice(config, out_dir, state_path):
     }
 
 
+AGENT_CALL_PREFIX = "agent_calls_"
+
+
+def load_agent_calls(store_dir):
+    known = {}
+    for path in sorted(Path(store_dir).glob(AGENT_CALL_PREFIX + "week_*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                call = json.loads(line)
+            except ValueError:
+                continue
+            if call.get("tool_use_id"):
+                known[call["tool_use_id"]] = call
+    return known
+
+
+def merge_agent_calls(store_dir, fresh, config, discard_stored=False):
+    known = {} if discard_stored else load_agent_calls(store_dir)
+    for call in fresh:
+        known[call["tool_use_id"]] = call
+    if not known:
+        return known
+    buckets = defaultdict(list)
+    for call in known.values():
+        buckets[window_start(parse_ts(call["ts"]), config)].append(call)
+    written = set()
+    for start, calls in buckets.items():
+        calls.sort(key=lambda call: (call["ts"], call["tool_use_id"]))
+        path = Path(store_dir) / (AGENT_CALL_PREFIX + window_key(start) + ".jsonl")
+        path.write_text(
+            "".join(json.dumps(call, sort_keys=True) + "\n" for call in calls), encoding="utf-8"
+        )
+        written.add(path)
+    for stale in sorted(Path(store_dir).glob(AGENT_CALL_PREFIX + "week_*.jsonl")):
+        if stale not in written:
+            stale.unlink()
+    return known
+
+
 def _fill_tool_results(stores, pending_results):
     if not pending_results:
         return
@@ -837,6 +916,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
 
     files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
     fresh = []
+    fresh_calls = []
     pending_results = {}
     for path in files:
         key = str(path.resolve())
@@ -845,6 +925,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         fresh.extend(result["records"])
         reset_candidates |= set(result["reset_candidates"])
         pending_results.update(result["pending_results"])
+        fresh_calls.extend(result["agent_calls"])
 
     detected = resolve_reset_weekday(reset_candidates)
     state["reset"] = {
@@ -879,6 +960,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
 
     parse_stats = {"files_scanned": len(files), "malformed_lines": malformed_total}
     windows, ceiling, written, notices = _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window)
+    calls = merge_agent_calls(store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only)
 
     _write_json(state_path, state)
     return {
@@ -890,6 +972,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         "ceiling": ceiling,
         "reset": state["reset"],
         "losses": losses,
+        "agent_calls": len(calls),
         **notices,
     }
 

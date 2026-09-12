@@ -233,3 +233,87 @@ def test_a_result_that_arrives_in_a_later_pass_is_filled_into_the_stored_turn(wo
     run(workspace)
     tool = stored_tools(workspace)[0][0]
     assert (tool["result_chars"], tool["is_error"], tool["denied"]) == (4, True, False)
+
+
+def _agent_turn(uuid, ts, call_id, description="Implement section 2", model="opus"):
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "timestamp": ts,
+            "sessionId": "s1",
+            "isSidechain": False,
+            "cwd": "C:\workspace\srst",
+            "message": {
+                "model": "claude-opus-5",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": "Agent",
+                        "input": {
+                            "description": description,
+                            "subagent_type": "general-purpose",
+                            "model": model,
+                            "prompt": "x" * 900,
+                        },
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 10,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
+            },
+        }
+    )
+
+
+def agent_calls(workspace, key="week_2026_08_22"):
+    path = workspace["out"] / "data" / "records" / ("agent_calls_" + key + ".jsonl")
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def test_an_agent_dispatch_is_stored_with_its_description(workspace):
+    (workspace["proj"] / "a.jsonl").write_text(
+        _agent_turn("u1", "2026-08-25T10:00:00Z", "toolu_1") + "\n", encoding="utf-8"
+    )
+    run(workspace)
+    call = agent_calls(workspace)[0]
+    assert call["tool_use_id"] == "toolu_1"
+    assert call["description"] == "Implement section 2"
+    assert call["subagent_type"] == "general-purpose"
+    assert call["model"] == "opus"
+    assert call["sessionId"] == "s1"
+    assert call["parent_uuid"] == "u1"
+    assert call["prompt_chars"] == 900
+    assert len(call["prompt_head"]) == CONFIG["prompt_label_chars"]
+
+
+def test_agent_dispatches_are_deduplicated_by_tool_use_id(workspace):
+    line = _agent_turn("u1", "2026-08-25T10:00:00Z", "toolu_1")
+    (workspace["proj"] / "a.jsonl").write_text(line + "\n", encoding="utf-8")
+    run(workspace)
+    (workspace["proj"] / "a.jsonl").write_text(
+        line + "\n" + _agent_turn("u2", "2026-08-25T11:00:00Z", "toolu_2") + "\n", encoding="utf-8"
+    )
+    run(workspace, backfill=True)
+    assert sorted(c["tool_use_id"] for c in agent_calls(workspace)) == ["toolu_1", "toolu_2"]
+
+
+def test_agent_dispatches_are_never_lost_when_the_transcript_is_pruned(workspace):
+    transcript = workspace["proj"] / "a.jsonl"
+    transcript.write_text(_agent_turn("u1", "2026-08-25T10:00:00Z", "toolu_1") + "\n", encoding="utf-8")
+    run(workspace)
+    transcript.write_text(_agent_turn("u2", "2026-08-25T11:00:00Z", "toolu_2") + "\n", encoding="utf-8")
+    run(workspace, backfill=True)
+    assert sorted(c["tool_use_id"] for c in agent_calls(workspace)) == ["toolu_1", "toolu_2"]
+
+
+def test_a_non_agent_tool_call_is_not_an_agent_dispatch(workspace):
+    (workspace["proj"] / "a.jsonl").write_text(
+        _tool_turn("u1", "2026-08-25T10:00:00Z", "c1") + "\n", encoding="utf-8"
+    )
+    run(workspace)
+    assert not list((workspace["out"] / "data" / "records").glob("agent_calls_*.jsonl"))
