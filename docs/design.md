@@ -314,15 +314,20 @@ and the turn count behind the repeat. A builder that cannot ground its line in t
 `None`, and the page says so rather than guessing.
 
 **Clustering key.** Runs are grouped by `agentId` (skills by `sessionId`, since a skill has no
-invocation id) and clustered on **tool mix, working directory, branch and agent type** — the fields
-every turn carries in full. `prompt` is deliberately *not* a clustering input: it is stored
+invocation id). A run is joined to the `Agent` call that dispatched it through `source_tool_use_id`,
+which gives it the description the orchestrator wrote, the model it asked for and the size of the
+prompt it was given. Runs that carry a description cluster on the description alone; the rest
+cluster on **tool mix, working directory, branch and agent type** — the fields every turn carries in
+full. `prompt` is deliberately *not* a clustering input: it is stored
 truncated at `prompt_label_chars` and often begins with skill boilerplate. It is used only as a
 human label, after known boilerplate prefixes are stripped; when what remains is too short to name
 a job the label is derived from the tools, repo and branch instead, and the cluster says which of
-the two it is. Every cluster reports a confidence (`high`, `medium`, `low`, `single run`,
+the two it is. Every cluster reports a confidence (`named`, `high`, `medium`, `low`, `single run`,
 `grouping only`) computed from run count, keyword agreement between the member runs' labels and
-tool coverage, and a cluster whose runs share tools and repo but not a job label is printed as
-`MIXED`.
+tool coverage; `named` is the top level and means every member run carries an orchestrator
+description, so the label is quoted rather than inferred. A cluster whose runs share tools and repo
+but not a job label is printed as `MIXED`. Not every run can be joined to its dispatch, so every
+cluster list states the share of runs a description was recovered for.
 
 **Tool coverage is stated, never hidden.** `tools` is populated on roughly half the turns — a
 text-only turn records none — so every per-cluster and per-finding tool share is accompanied by the
@@ -564,6 +569,13 @@ by_repo          keyed by cwd
 by_branch        keyed by gitBranch
 by_agent         keyed by attributionAgent   (subagent turns only)
 by_skill         keyed by attributionSkill
+by_mcp_server    keyed by the MCP server the turn was attributed to
+by_plugin        keyed by the plugin the turn was attributed to
+field_coverage   {field: {present, total, share}} for every field added after
+                 schema_version 1, plus tool_results as a share of tool calls
+                 rather than of turns. Records written before a field existed
+                 carry none of it, so a lens over it is read against its own
+                 coverage and never against the window's turn count
 unknown_models   the subset of by_model whose name matched neither an exact nor a
                  family weight and was therefore priced at default_model_weight
 
@@ -618,15 +630,43 @@ Every run compares the store against the current weights and names the windows
 that drifted, so a weight edit cannot sit unapplied unnoticed.
 
 Normalized record fields: `ts, uuid, sessionId, model, model_known, effort,
-isSidechain, agentId, attributionAgent, attributionSkill, cwd, gitBranch,
-version, input, output, thinking, cache_create, cache_read, weighted,
-tools[{name, hash}], text_chars, is_api_error, prompt`.
+isSidechain, agentId, attributionAgent, attributionSkill, mcp_server, mcp_tool,
+plugin, per_turn_effort, stop_reason, compacted, after_compaction,
+source_tool_use_id, cwd, gitBranch, version, input, output, thinking,
+cache_create, cache_create_5m, cache_create_1h, cache_read, weighted,
+tools[{name, hash, tool_use_id, result_chars, is_error, denied}], text_chars,
+is_api_error, prompt`.
+
+`cache_create_5m` and `cache_create_1h` split `cache_create`, which stays their
+sum and stays priced at one flat weight. `after_compaction` marks the turn that
+follows a compact summary. `source_tool_use_id` is the Agent call that spawned a
+subagent transcript, taken from the first user entry of that file which carries
+one and stamped on every turn of it.
+
+A tool call's outcome is joined onto it from the `tool_result` block that names
+its `tool_use_id`, within the same transcript file and in the same pass. Results
+arrive in the user entry after the call, so a pass that ends between the two
+stores the call with `result_chars`, `is_error` and `denied` all null and hands
+the unmatched result to the next pass, which fills it into the stored record.
+A null outcome therefore means *not yet known*, never *succeeded*: every figure
+derived from outcomes states the share of calls that carry one. Records written
+before this field existed carry none, and stay unresolved until a
+`--rebuild-from-transcripts-only` re-reads the transcripts that are still there.
+
+`data/records/agent_calls_week_YYYY_MM_DD.jsonl` holds one line per `Agent` tool
+call, keyed by `tool_use_id`: `{tool_use_id, ts, sessionId, parent_uuid,
+description, subagent_type, model, prompt_chars, prompt_head}`. `parent_uuid` is
+the uuid of the assistant turn that issued the call. These files are merged by
+`tool_use_id` on every run and never shrink, under the same rule as the records,
+and are bucketed by the dispatch timestamp. They are always read as a whole set,
+so a subagent whose turns land in the window after its dispatch still joins.
 
 `state.json` maps absolute transcript path to
-`{offset, size, mtime, last_prompt, malformed}`. A file is skipped when size and
-mtime are both unchanged, resumed from `offset` when it has strictly grown, and
-re-read from byte zero otherwise. A trailing line without a newline is left
-unconsumed until it is complete.
+`{offset, size, mtime, last_prompt, malformed, source_tool_use_id,
+pending_compaction}`. A file is skipped when size and mtime are both unchanged,
+resumed from `offset` when it has strictly grown, and re-read from byte zero
+otherwise. A trailing line without a newline is left unconsumed until it is
+complete.
 
 ## The advice engine
 
@@ -1019,15 +1059,17 @@ is the cost of the work done under it, not the cost of loading it.
 
 ## Wasted round trips
 
-Measured from the durable record store joined to the transcripts by assistant `uuid`, with the
-per-turn tool list aligned to the transcript's `tool_use` blocks by index (verified: 22,440 turns
-aligned, 0 mismatched). Shipped detectors, all evidence-backed:
+Measured from the durable record store alone. Each tool call carries the outcome of its own
+`tool_result`, joined at collection time by `tool_use_id`, so no transcript is read here and a
+pruned transcript cannot change the figures. A call whose outcome was never captured counts as
+unresolved, and the section states the share of calls that carry one. Shipped detectors, all
+evidence-backed:
 
 | detector | source | observed |
 |---|---|---|
-| tool call returned an error | `tool_result.is_error` | 1.3-1.6% of weighted, every window |
+| tool call returned an error | the record's own `is_error` flag | 1.3-1.6% of weighted, every window |
 | same input re-issued after it failed, and failed again | the above plus the record's tool hash | 0.00-0.16% |
-| permission-denied call | error text | 0-2 per window |
+| permission-denied call | the record's own `denied` flag, set from the error text at collection | 0-2 per window |
 | turn the API errored | the collector's `is_api_error` | ~0.00% |
 
 The retry detector counts only repeats that failed again. A repeat that succeeded is the recovery,
