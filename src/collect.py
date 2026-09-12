@@ -123,6 +123,10 @@ def _tool_hash(name, tool_input):
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def _optional_int(value):
+    return None if value is None else int(value)
+
+
 def normalize(entry, config):
     if entry.get("type") != "assistant":
         return None
@@ -142,6 +146,8 @@ def normalize(entry, config):
         "cache_read": int(usage.get("cache_read_input_tokens") or 0),
     }
     weighted = model_weight * sum(weights[cls] * value for cls, value in counts.items())
+    split = usage.get("cache_creation")
+    split = split if isinstance(split, dict) else {}
 
     tools = []
     text_chars = 0
@@ -151,7 +157,13 @@ def normalize(entry, config):
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use":
-                tools.append({"name": block.get("name"), "hash": _tool_hash(block.get("name"), block.get("input"))})
+                tools.append(
+                    {
+                        "name": block.get("name"),
+                        "hash": _tool_hash(block.get("name"), block.get("input")),
+                        "tool_use_id": block.get("id"),
+                    }
+                )
             elif block.get("type") == "text":
                 text_chars += len(block.get("text") or "")
 
@@ -166,6 +178,14 @@ def normalize(entry, config):
         "agentId": entry.get("agentId"),
         "attributionAgent": entry.get("attributionAgent"),
         "attributionSkill": entry.get("attributionSkill"),
+        "mcp_server": entry.get("attributionMcpServer"),
+        "mcp_tool": entry.get("attributionMcpTool"),
+        "plugin": entry.get("attributionPlugin"),
+        "per_turn_effort": entry.get("perTurnEffort"),
+        "stop_reason": message.get("stop_reason"),
+        "cache_create_5m": _optional_int(split.get("ephemeral_5m_input_tokens")),
+        "cache_create_1h": _optional_int(split.get("ephemeral_1h_input_tokens")),
+        "compacted": message.get("context_management") is not None,
         "cwd": entry.get("cwd"),
         "gitBranch": entry.get("gitBranch"),
         "version": entry.get("version"),

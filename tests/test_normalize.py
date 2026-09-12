@@ -161,3 +161,65 @@ def test_a_family_with_conflicting_weights_does_not_price_its_suffixes():
 def test_a_model_of_an_unconfigured_family_is_still_unknown():
     r = collect.normalize(entry(message=dict(entry()["message"], model="claude-zebra-9-1")), CONFIG)
     assert r["model_known"] is False
+
+
+def test_mcp_plugin_and_effort_attribution_is_carried():
+    r = collect.normalize(
+        entry(
+            attributionMcpServer="datadog-mcp",
+            attributionMcpTool="search_datadog_logs",
+            attributionPlugin="prose",
+            perTurnEffort="high",
+        ),
+        CONFIG,
+    )
+    assert r["mcp_server"] == "datadog-mcp"
+    assert r["mcp_tool"] == "search_datadog_logs"
+    assert r["plugin"] == "prose"
+    assert r["per_turn_effort"] == "high"
+
+
+def test_attribution_fields_absent_from_the_entry_are_none():
+    r = collect.normalize(entry(), CONFIG)
+    assert (r["mcp_server"], r["mcp_tool"], r["plugin"], r["per_turn_effort"]) == (None, None, None, None)
+
+
+def test_stop_reason_is_carried_from_the_message():
+    assert collect.normalize(entry(message=dict(entry()["message"], stop_reason="tool_use")), CONFIG)["stop_reason"] == "tool_use"
+    assert collect.normalize(entry(), CONFIG)["stop_reason"] is None
+
+
+def test_the_cache_creation_split_is_kept_and_still_sums_to_cache_create():
+    e = entry()
+    e["message"]["usage"]["cache_creation"] = {
+        "ephemeral_5m_input_tokens": 300,
+        "ephemeral_1h_input_tokens": 100,
+    }
+    r = collect.normalize(e, CONFIG)
+    assert (r["cache_create_5m"], r["cache_create_1h"]) == (300, 100)
+    assert r["cache_create"] == 400
+
+
+def test_the_cache_split_does_not_change_the_weighted_cost():
+    plain = collect.normalize(entry(), CONFIG)
+    e = entry()
+    e["message"]["usage"]["cache_creation"] = {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 400}
+    assert collect.normalize(e, CONFIG)["weighted"] == plain["weighted"]
+
+
+def test_a_turn_without_a_cache_creation_object_has_no_split():
+    r = collect.normalize(entry(), CONFIG)
+    assert (r["cache_create_5m"], r["cache_create_1h"]) == (None, None)
+
+
+def test_a_context_managed_turn_is_flagged_as_compacted():
+    e = entry()
+    e["message"]["context_management"] = {"applied_edits": []}
+    assert collect.normalize(e, CONFIG)["compacted"] is True
+    assert collect.normalize(entry(), CONFIG)["compacted"] is False
+
+
+def test_a_tool_call_keeps_the_id_the_result_will_be_joined_on():
+    e = entry()
+    e["message"]["content"] = [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]
+    assert collect.normalize(e, CONFIG)["tools"][0]["tool_use_id"] == "toolu_1"
