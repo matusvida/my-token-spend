@@ -128,7 +128,7 @@ CORNER = 4
 GAP = 2
 
 
-INSIDE_LABEL_SHARE = 0.6
+INSIDE_LABEL_MIN = 56.0
 
 
 def _plot_box(height=PLOT_HEIGHT):
@@ -274,7 +274,7 @@ def svg_ranked_bars(rows, color="--series-1", label_width=280, row_height=32):
                 esc(row["tip"]),
             )
         )
-        inside = length > INSIDE_LABEL_SHARE * track
+        inside = length >= INSIDE_LABEL_MIN
         parts.append(
             '<text class="value-label%s" x="%.2f" y="%.2f">%s</text>'
             % (
@@ -502,12 +502,14 @@ def svg_context_series(chart, height=280):
         '<line class="baseline" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f"/>'
         % (left, top + plot_height, PLOT_WIDTH - MARGIN["right"], top + plot_height)
     )
-    for position in (0, len(series) // 2, len(series) - 1):
+    last = len(series) - 1
+    for position, anchor in ((0, "start"), (last // 2, "middle"), (last, "end")):
         parts.append(
-            '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="middle">%s</text>'
+            '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="%s">%s</text>'
             % (
                 left + band * position + bar_width / 2,
                 top + plot_height + 22,
+                anchor,
                 esc("turn %d (%s)" % (position + 1, _clock(series[position][0]))),
             )
         )

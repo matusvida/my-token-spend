@@ -1526,14 +1526,14 @@ def test_a_long_bars_value_label_is_drawn_inside_the_bar():
 
     rows = [
         {"label": "biggest", "value": 1000.0, "tip": "t"},
+        {"label": "middling", "value": 300.0, "tip": "t"},
         {"label": "tiny", "value": 20.0, "tip": "t"},
     ]
     svg = charts.svg_ranked_bars(rows, label_width=280)
     labels = re.findall(r'<text class="value-label( inside)?" x="([0-9.]+)"', svg)
-    assert labels[0][0] == " inside"
-    assert labels[1][0] == ""
-    track = charts.PLOT_WIDTH - 280 - 140
-    assert float(labels[0][1]) < 280 + track
+    assert [item[0] for item in labels] == [" inside", " inside", ""]
+    assert float(labels[0][1]) == float(labels[1][1]) == 290.0
+    assert float(labels[2][1]) < 290.0 + charts.INSIDE_LABEL_MIN
 
 
 def test_whale_labels_carry_seconds_and_a_turn_number_when_the_minute_repeats():
