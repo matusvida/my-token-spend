@@ -1329,9 +1329,9 @@ def _headline_section(window, previous):
     delta = total_delta(previous, window)
     tiles = [
         (
-            "Percent of ceiling",
+            "Percent of %s" % ("quota" if collect.quota_is_known(ceiling) else "ceiling"),
             percent(ceiling["percent_used"]) if ceiling.get("percent_used") is not None else "unknown",
-            "%s estimate (%s)" % ("approximate" if ceiling.get("approximate") else "exact", ceiling.get("method", "-")),
+            collect.ceiling_method_text(ceiling),
         ),
         ("Burn rate", "%s / day" % compact(ceiling.get("burn_rate_per_day") or 0), "over %.2f elapsed days" % window["window"]["elapsed_days"]),
         budget_tile(ceiling),
@@ -1362,9 +1362,10 @@ def _headline_section(window, previous):
     if ceiling.get("percent_used") is not None:
         meter_html = meter(
             ceiling["percent_used"] / 100.0,
-            "%s of an estimated %s weighted-token ceiling, %s remaining"
+            "%s of %s, %s weighted tokens, %s remaining"
             % (
                 percent(ceiling["percent_used"]),
+                collect.ceiling_noun(ceiling),
                 compact(ceiling["estimate"]),
                 compact(ceiling.get("remaining_weighted") or 0),
             ),
@@ -1394,10 +1395,11 @@ def _verdict_lines(window, previous):
         (
             "Window position",
             percent(percent_used) if percent_used is not None else "unknown",
-            "of an estimated %s ceiling (%s), %s left"
+            "of %s of %s (%s), %s left"
             % (
                 compact(ceiling.get("estimate") or 0),
-                ceiling.get("method", "-"),
+                collect.ceiling_noun(ceiling),
+                collect.ceiling_method_text(ceiling),
                 compact(ceiling.get("remaining_weighted") or 0),
             ),
         ),

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import math
+import statistics
 import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone, tzinfo
@@ -341,7 +342,74 @@ def read_file(path, config, stored):
     }
 
 
-def estimate_ceiling(window_totals, config):
+QUOTA_FIT_DEFAULTS = {"min_pct": 10, "min_samples": 3, "windows": 3, "fresh_hours": 6}
+
+
+def quota_fit(samples, config, instants=None, now=None):
+    settings = dict(QUOTA_FIT_DEFAULTS, **(config["ceiling"].get("quota_fit") or {}))
+    now = now or datetime.now(timezone.utc)
+    instants = quota.reset_instants(samples) if instants is None else instants
+    current = window_start(now, config, instants)
+    usable = []
+    for sample in samples:
+        pct, weighted = sample.get("seven_day_pct"), sample.get("weighted_so_far")
+        if pct is None or weighted is None or pct < settings["min_pct"] or weighted <= 0:
+            continue
+        start = window_start(parse_ts(sample["ts"]), config, instants)
+        if start <= current:
+            usable.append((start, pct / 100.0, float(weighted)))
+    wanted = sorted({start for start, _, _ in usable})[-settings["windows"]:]
+    points = [(fraction, weighted) for start, fraction, weighted in usable if start in wanted]
+    denominator = sum(fraction * fraction for fraction, _ in points)
+    if len(points) < settings["min_samples"] or denominator <= 0:
+        return None
+    estimate = sum(fraction * weighted for fraction, weighted in points) / denominator
+    implied = [weighted / fraction for fraction, weighted in points]
+    spread = statistics.pstdev(implied) if len(implied) > 1 else 0.0
+    latest = quota.latest_sample(samples)
+    age = quota.sample_age_hours(latest, now)
+    return {
+        "estimate": estimate,
+        "method": "quota-fit",
+        "approximate": True,
+        "cluster_size": 0,
+        "windows_considered": len(wanted),
+        "samples_used": len(points),
+        "band_pct": round(100.0 * spread / estimate, 1) if estimate else None,
+        "latest_pct": (latest or {}).get("seven_day_pct"),
+        "latest_pct_is_fresh": age is not None and age < settings["fresh_hours"],
+    }
+
+
+def ceiling_method_text(ceiling):
+    method = (ceiling or {}).get("method")
+    if method == "quota-fit":
+        band = ceiling.get("band_pct")
+        return "fitted from %d usage samples%s" % (
+            ceiling.get("samples_used") or 0,
+            "" if band is None else ", ±%.0f%%" % band,
+        )
+    if method == "override":
+        return "the ceiling set in your config"
+    if method == "top-cluster":
+        return "estimated ceiling, from your own heavy weeks"
+    if method == "insufficient-data":
+        return "no ceiling yet, too few windows collected"
+    return "ceiling method unknown"
+
+
+def quota_is_known(ceiling):
+    return (ceiling or {}).get("method") in ("quota-fit", "override")
+
+
+def ceiling_noun(ceiling):
+    return "your weekly quota" if quota_is_known(ceiling) else "an estimated ceiling"
+
+
+def estimate_ceiling(window_totals, config, samples=None, instants=None, now=None):
+    fitted = quota_fit(samples or [], config, instants=instants, now=now)
+    if fitted is not None:
+        return fitted
     settings = config["ceiling"]
     if settings["override"] is not None:
         return {
@@ -539,12 +607,14 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling, instants
         "field_coverage": field_coverage(records),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
-        "ceiling": ceiling_block(ceiling, totals["weighted"], elapsed_days, now, end_local),
+        "ceiling": ceiling_block(
+            ceiling, totals["weighted"], elapsed_days, now, end_utc, start_utc <= now < end_utc
+        ),
         "parse": dict(parse_stats, records=len(records)),
     }
 
 
-def ceiling_block(ceiling, weighted, elapsed_days, now, end_local):
+def ceiling_block(ceiling, weighted, elapsed_days, now, end_local, is_current=False):
     block = dict(ceiling or {"estimate": None, "method": "unknown", "approximate": True})
     burn_rate = weighted / elapsed_days if elapsed_days > 0 else None
     remaining_seconds = max(0.0, (end_local - now).total_seconds())
@@ -553,7 +623,12 @@ def ceiling_block(ceiling, weighted, elapsed_days, now, end_local):
     remaining_budget = max(0.0, estimate - weighted) if estimate else None
 
     block["burn_rate_per_day"] = round(burn_rate, 2) if burn_rate is not None else None
-    block["percent_used"] = round(100.0 * weighted / estimate, 4) if estimate else None
+    if is_current and block.get("method") == "quota-fit" and block.get("latest_pct_is_fresh"):
+        block["percent_used"] = block.get("latest_pct")
+        block["percent_used_source"] = "quota-sample"
+    else:
+        block["percent_used"] = round(100.0 * weighted / estimate, 4) if estimate else None
+        block["percent_used_source"] = "ceiling-estimate" if estimate else None
     block["remaining_weighted"] = round(remaining_budget, 2) if remaining_budget is not None else None
     block["remaining_days"] = round(remaining_days, 4)
     block["remaining_hours"] = round(remaining_seconds / 3600.0, 2)
@@ -716,7 +791,9 @@ def _prune_window(store_dir, data_dir, reports_dir, key):
             path.unlink()
 
 
-def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window, instants=None):
+def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None):
+    samples = samples or []
+    instants = quota.reset_instants(samples)
     windows = {
         start: sorted(records.values(), key=lambda r: (r["ts"], r["uuid"] or ""))
         for start, records in sorted(stores.items())
@@ -730,7 +807,10 @@ def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, win
             _write_store(store_dir / (window_key(date.fromisoformat(start)) + ".jsonl"), records)
 
     ceiling = estimate_ceiling(
-        {start: sum(r["weighted"] for r in records) for start, records in windows.items()}, config
+        {start: sum(r["weighted"] for r in records) for start, records in windows.items()},
+        config,
+        samples=samples,
+        instants=instants,
     )
     written = []
     for start, records in windows.items():
@@ -766,7 +846,8 @@ def recut(config, out_dir, state_path, window=None):
     if not known:
         raise CollectionError("the record store under %s is empty; run collect first" % store_dir)
 
-    instants = quota.reset_instants(quota.load_samples(data_dir))
+    samples = quota.load_samples(data_dir)
+    instants = quota.reset_instants(samples)
     stores = {}
     for key, record in known.items():
         stores.setdefault(window_start(parse_ts(record["ts"]), config, instants).isoformat(), {})[key] = record
@@ -781,7 +862,7 @@ def recut(config, out_dir, state_path, window=None):
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
     windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, instants
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples
     )
     merge_agent_calls(store_dir, [], config, instants=instants)
     return {
@@ -799,7 +880,8 @@ def reprice(config, out_dir, state_path):
     out_dir, state_path = Path(out_dir), Path(state_path)
     data_dir, reports_dir, store_dir = _prepare_dirs(out_dir)
 
-    instants = quota.reset_instants(quota.load_samples(data_dir))
+    samples = quota.load_samples(data_dir)
+    instants = quota.reset_instants(samples)
     before = _load_stores(store_dir)
     if not any(before.values()):
         raise CollectionError("the record store under %s is empty; run collect first" % store_dir)
@@ -829,7 +911,7 @@ def reprice(config, out_dir, state_path):
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
     windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, None, instants
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, None, samples
     )
     return {
         "windows": written,
@@ -933,7 +1015,8 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     backfill = backfill or rebuild_from_transcripts_only
 
     state = {"files": {}} if backfill else _load_json(state_path, {"files": {}})
-    instants = quota.reset_instants(quota.load_samples(data_dir))
+    samples = quota.load_samples(data_dir)
+    instants = quota.reset_instants(samples)
 
     files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
     fresh = []
@@ -973,7 +1056,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
 
     parse_stats = {"files_scanned": len(files), "malformed_lines": malformed_total}
     windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, instants
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples
     )
     calls = merge_agent_calls(
         store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only, instants=instants
@@ -1074,11 +1157,11 @@ def render_markdown(window):
             ["metric", "value"],
             [
                 ["weighted tokens spent", _num(totals["weighted"])],
+                ["%s (%s)" % (ceiling_noun(ceiling), ceiling_method_text(ceiling)), _num(ceiling["estimate"])],
                 [
-                    "ceiling estimate (%s%s)" % (ceiling["method"], ", approximate" if ceiling["approximate"] else ""),
-                    _num(ceiling["estimate"]),
+                    "percent used (%s)" % (ceiling.get("percent_used_source") or "-"),
+                    "-" if ceiling["percent_used"] is None else "%.1f%%" % ceiling["percent_used"],
                 ],
-                ["percent of ceiling", "-" if ceiling["percent_used"] is None else "%.1f%%" % ceiling["percent_used"]],
                 ["burn rate / day", _num(ceiling["burn_rate_per_day"])],
                 ["remaining until reset", _remaining_text(ceiling)],
                 ["sustainable rate / day", _sustainable_text(ceiling)],

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import advice
+import collect
 import paths
 import rules
 
@@ -993,6 +994,9 @@ def build(
         ],
         "ceiling": ceiling,
         "ceiling_method": (latest.get("ceiling") or {}).get("method"),
+        "ceiling_detail": {
+            key: (latest.get("ceiling") or {}).get(key) for key in ("samples_used", "band_pct")
+        },
         "pacing": [pacing(data, records_by_window.get(data["window"]["key"]) or [], ceiling, settings_map) for data in windows],
         "current": current_pacing(
             current, records_by_window.get((current or {}).get("window", {}).get("key")) or [], ceiling, settings_map, now
@@ -1078,9 +1082,10 @@ def _bar(fraction, width=24):
 def _render_pacing(result, lines):
     ceiling = result["ceiling"]
     lines.append("1. PACING AND EXHAUSTION")
+    block = {"method": result["ceiling_method"], **(result.get("ceiling_detail") or {})}
     lines.append(
-        "   ceiling estimate %s weighted (%s) - inferred from this machine's own history, not from Anthropic."
-        % (_num(ceiling), result["ceiling_method"])
+        "   %s %s weighted - %s."
+        % (collect.ceiling_noun(block).capitalize(), _num(ceiling), collect.ceiling_method_text(block))
     )
     for window in result["pacing"]:
         lines.append("")

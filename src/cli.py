@@ -10,7 +10,7 @@ from pathlib import Path
 
 import paths
 
-SUBCOMMANDS = ("collect", "report", "status", "tune", "install-schedule")
+SUBCOMMANDS = ("collect", "report", "status", "quota", "tune", "install-schedule")
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -243,6 +243,46 @@ def cmd_status(args):
     print("html reports     : %d" % len(reports))
     if reports:
         print("latest report    : %s" % reports[-1])
+    return 0
+
+
+def cmd_quota(args):
+    import collect
+    import quota
+
+    home = paths.ensure_home()
+    config = load_config(home)
+    data_dir = paths.data_dir(home)
+    samples = quota.load_samples(data_dir)
+    path = quota.samples_path(data_dir)
+    print("samples          : %d in %s" % (len(samples), path))
+    if not samples:
+        print("Nothing has been sampled yet. Run collect once while the network and a live token are there.")
+        return 0
+
+    latest = quota.latest_sample(samples)
+    age = quota.sample_age_hours(latest)
+    print("latest sample    : %s (%s)" % (latest["ts"], "%.1f h ago" % age if age is not None else "age unknown"))
+    print("seven day used   : %s%%, resets at %s" % (latest.get("seven_day_pct"), latest.get("seven_day_resets_at")))
+    print("five hour used   : %s%%, resets at %s" % (latest.get("five_hour_pct"), latest.get("five_hour_resets_at")))
+    print("window spend     : %s weighted at that instant" % collect._num(latest.get("weighted_so_far")))
+    for name, block in sorted((latest.get("per_model") or {}).items()):
+        print("  %-14s : %s%%, resets at %s" % (name, block.get("pct"), block.get("resets_at")))
+    extra = latest.get("extra_usage") or {}
+    if extra.get("is_enabled"):
+        print(
+            "extra usage      : %s of %s %s used"
+            % (extra.get("used_credits"), extra.get("monthly_limit"), extra.get("currency"))
+        )
+    instants = quota.reset_instants(samples)
+    print("reset instants   : %s" % ", ".join(moment.isoformat() for moment in instants[-4:]))
+
+    totals = {key: value["weighted"] for key, value in window_totals(data_dir).items()}
+    ceiling = collect.estimate_ceiling(totals, config, samples=samples, instants=instants)
+    print(
+        "ceiling          : %s weighted - %s (%s)"
+        % (collect._num(ceiling["estimate"]), collect.ceiling_method_text(ceiling), collect.ceiling_noun(ceiling))
+    )
     return 0
 
 
@@ -542,6 +582,9 @@ def build_parser():
         "--set-reset-weekday", metavar="DAY", help="weekday the windows fall back to when no quota sample is stored"
     )
     status_parser.set_defaults(func=cmd_status)
+
+    quota_parser = subparsers.add_parser("quota", help="show the latest usage sample and the ceiling derived from it")
+    quota_parser.set_defaults(func=cmd_quota)
 
     tune_parser = subparsers.add_parser("tune", help="pace the window and map agent and skill spend onto the files on disk")
     tune_parser.add_argument("--window", metavar="YYYY-MM-DD", help="analyse only this window instead of the most recent closed ones")
