@@ -195,3 +195,27 @@ def sample_age_hours(sample, now=None):
     if moment is None:
         return None
     return ((now or datetime.now(timezone.utc)) - moment).total_seconds() / 3600.0
+
+
+def window_end(start, instants):
+    end = start + WEEK
+    for moment in instants or ():
+        if start < moment < end:
+            return moment
+    return end
+
+
+def window_instant(ts_utc, instants):
+    if not instants:
+        return None
+    base = instants[0]
+    for moment in instants:
+        if moment <= ts_utc:
+            base = moment
+    while base > ts_utc:
+        base -= WEEK
+    while True:
+        end = window_end(base, instants)
+        if ts_utc < end:
+            return base
+        base = end

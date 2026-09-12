@@ -8,6 +8,7 @@ from datetime import time as time_of_day
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import quota
 import rules
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -49,7 +50,10 @@ def parse_ts(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def window_start(dt_utc, config):
+def window_start(dt_utc, config, instants=None):
+    instant = quota.window_instant(dt_utc, instants)
+    if instant is not None:
+        return instant.astimezone(zone(config)).date()
     local = dt_utc.astimezone(zone(config))
     shifted = local - timedelta(hours=config["reset_hour"])
     days_back = (shifted.weekday() - WEEKDAYS.index(config["reset_weekday"])) % 7
@@ -60,15 +64,21 @@ def window_key(start_date):
     return "week_" + start_date.strftime("%Y_%m_%d")
 
 
-def window_bounds(start_date, config):
-    start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=zone(config))
-    return start_local.astimezone(timezone.utc), (start_local + timedelta(days=7)).astimezone(timezone.utc)
+def window_bounds(start_date, config, instants=None):
+    tz = zone(config)
+    if instants:
+        probe = datetime.combine(start_date, time_of_day(23, 59, 59), tzinfo=tz).astimezone(timezone.utc)
+        instant = quota.window_instant(probe, instants)
+        if instant is not None and instant.astimezone(tz).date() == start_date:
+            return instant, quota.window_end(instant, instants), "quota-sample"
+    start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=tz)
+    return start_local.astimezone(timezone.utc), (start_local + timedelta(days=7)).astimezone(timezone.utc), "config"
 
 
-def bucket_records(records, config):
+def bucket_records(records, config, instants=None):
     buckets = defaultdict(list)
     for record in records:
-        buckets[window_start(parse_ts(record["ts"]), config).isoformat()].append(record)
+        buckets[window_start(parse_ts(record["ts"]), config, instants).isoformat()].append(record)
     return dict(buckets)
 
 
@@ -467,9 +477,9 @@ def field_coverage(records):
     return covered
 
 
-def aggregate_window(start_date, records, config, parse_stats, ceiling):
+def aggregate_window(start_date, records, config, parse_stats, ceiling, instants=None):
     tz = zone(config)
-    start_utc, end_utc = window_bounds(start_date, config)
+    start_utc, end_utc, boundary_source = window_bounds(start_date, config, instants)
     start_local, end_local = start_utc.astimezone(tz), end_utc.astimezone(tz)
     now = datetime.now(timezone.utc)
     window_seconds = (end_utc - start_utc).total_seconds()
@@ -502,6 +512,7 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling):
             "start_utc": start_utc.isoformat(),
             "end_utc": end_utc.isoformat(),
             "timezone": zone_label(config),
+            "boundary_source": boundary_source,
             "reset_weekday": config["reset_weekday"],
             "reset_hour": config["reset_hour"],
             "is_current": start_utc <= now < end_utc,
@@ -648,15 +659,15 @@ def _load_stores(store_dir):
     return stores
 
 
-def _window_is_closed(start_date, config, now):
-    return now >= window_bounds(start_date, config)[1]
+def _window_is_closed(start_date, config, now, instants=None):
+    return now >= window_bounds(start_date, config, instants)[1]
 
 
-def _losses(before, after, config):
+def _losses(before, after, config, instants=None):
     now = datetime.now(timezone.utc)
     losses = []
     for start, prior in sorted(before.items()):
-        if not prior or not _window_is_closed(date.fromisoformat(start), config, now):
+        if not prior or not _window_is_closed(date.fromisoformat(start), config, now, instants):
             continue
         current = after.get(start) or {}
         prior_weighted = sum(r["weighted"] for r in prior.values())
@@ -705,7 +716,7 @@ def _prune_window(store_dir, data_dir, reports_dir, key):
             path.unlink()
 
 
-def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window):
+def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window, instants=None):
     windows = {
         start: sorted(records.values(), key=lambda r: (r["ts"], r["uuid"] or ""))
         for start, records in sorted(stores.items())
@@ -725,7 +736,7 @@ def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, win
     for start, records in windows.items():
         if (window and start != window) or not records:
             continue
-        aggregate = aggregate_window(date.fromisoformat(start), records, config, parse_stats, ceiling)
+        aggregate = aggregate_window(date.fromisoformat(start), records, config, parse_stats, ceiling, instants)
         key = aggregate["window"]["key"]
         _write_json(data_dir / (key + ".json"), aggregate)
         (reports_dir / (key + ".md")).write_text(render_markdown(aggregate), encoding="utf-8")
@@ -755,9 +766,10 @@ def recut(config, out_dir, state_path, window=None):
     if not known:
         raise CollectionError("the record store under %s is empty; run collect first" % store_dir)
 
+    instants = quota.reset_instants(quota.load_samples(data_dir))
     stores = {}
     for key, record in known.items():
-        stores.setdefault(window_start(parse_ts(record["ts"]), config).isoformat(), {})[key] = record
+        stores.setdefault(window_start(parse_ts(record["ts"]), config, instants).isoformat(), {})[key] = record
     rebucketed = sum(len(bucket) for bucket in stores.values())
     if rebucketed != len(known):
         raise CollectionError("re-cut would change the record count from %d to %d" % (len(known), rebucketed))
@@ -768,7 +780,10 @@ def recut(config, out_dir, state_path, window=None):
         "files_scanned": len(tracked),
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
-    windows, ceiling, written, notices = _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window)
+    windows, ceiling, written, notices = _finalize(
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, instants
+    )
+    merge_agent_calls(store_dir, [], config, instants=instants)
     return {
         "windows": written,
         "new_records": 0,
@@ -784,6 +799,7 @@ def reprice(config, out_dir, state_path):
     out_dir, state_path = Path(out_dir), Path(state_path)
     data_dir, reports_dir, store_dir = _prepare_dirs(out_dir)
 
+    instants = quota.reset_instants(quota.load_samples(data_dir))
     before = _load_stores(store_dir)
     if not any(before.values()):
         raise CollectionError("the record store under %s is empty; run collect first" % store_dir)
@@ -799,7 +815,7 @@ def reprice(config, out_dir, state_path):
             for key, record in bucket.items()
         }
 
-    dropped = [loss for loss in _losses(before, stores, config) if loss["dropped_records"]]
+    dropped = [loss for loss in _losses(before, stores, config, instants) if loss["dropped_records"]]
     if dropped:
         raise CollectionError(
             "%s\nre-pricing must never lose a record; the store under %s was left untouched."
@@ -813,7 +829,7 @@ def reprice(config, out_dir, state_path):
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
     windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, None
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, None, instants
     )
     return {
         "windows": written,
@@ -853,7 +869,7 @@ def load_agent_calls(store_dir):
     return known
 
 
-def merge_agent_calls(store_dir, fresh, config, discard_stored=False):
+def merge_agent_calls(store_dir, fresh, config, discard_stored=False, instants=None):
     known = {} if discard_stored else load_agent_calls(store_dir)
     for call in fresh:
         known[call["tool_use_id"]] = call
@@ -861,7 +877,7 @@ def merge_agent_calls(store_dir, fresh, config, discard_stored=False):
         return known
     buckets = defaultdict(list)
     for call in known.values():
-        buckets[window_start(parse_ts(call["ts"]), config)].append(call)
+        buckets[window_start(parse_ts(call["ts"]), config, instants)].append(call)
     written = set()
     for start, calls in buckets.items():
         calls.sort(key=lambda call: (call["ts"], call["tool_use_id"]))
@@ -895,6 +911,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     backfill = backfill or rebuild_from_transcripts_only
 
     state = {"files": {}} if backfill else _load_json(state_path, {"files": {}})
+    instants = quota.reset_instants(quota.load_samples(data_dir))
 
     files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
     fresh = []
@@ -914,7 +931,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     known = _load_stores(store_dir)
     stores = {} if rebuild_from_transcripts_only else {start: dict(b) for start, b in known.items()}
     for record in fresh:
-        start = window_start(parse_ts(record["ts"]), config).isoformat()
+        start = window_start(parse_ts(record["ts"]), config, instants).isoformat()
         stores.setdefault(start, {})[_record_key(record)] = record
     _fill_tool_results(stores, pending_results)
 
@@ -924,7 +941,7 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
             % (root, len(files), malformed_total)
         )
 
-    losses = _losses(known, stores, config)
+    losses = _losses(known, stores, config, instants)
     if losses and not rebuild_from_transcripts_only:
         raise CollectionError(
             "%s\nthe record store under %s is the durable history and transcripts are pruned by Claude Code.\n"
@@ -933,8 +950,12 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         )
 
     parse_stats = {"files_scanned": len(files), "malformed_lines": malformed_total}
-    windows, ceiling, written, notices = _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window)
-    calls = merge_agent_calls(store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only)
+    windows, ceiling, written, notices = _finalize(
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, instants
+    )
+    calls = merge_agent_calls(
+        store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only, instants=instants
+    )
 
     _write_json(state_path, state)
     return {
@@ -999,18 +1020,23 @@ def _breakdown_table(title, entries, limit=10):
     return "## %s\n\n%s\n" % (title, _table(["key", "weighted", "turns", "cache read", "output"], rows))
 
 
+def boundary_label(meta):
+    if meta.get("boundary_source") == "quota-sample":
+        return "cut at the reset instant Anthropic reports, %s UTC" % meta["start_utc"][11:16]
+    return "cut at the configured fallback, %s %02d:00" % (meta["reset_weekday"], meta["reset_hour"])
+
+
 def render_markdown(window):
     meta, totals, ceiling = window["window"], window["totals"], window["ceiling"]
     parts = [
         "# %s" % meta["key"],
         "",
-        "%s -> %s (%s, %s reset at %02d:00) - %.2f of 7 days elapsed%s"
+        "%s -> %s (%s, %s) - %.2f days elapsed%s"
         % (
             meta["start"],
             meta["end"],
             meta["timezone"],
-            meta["reset_weekday"],
-            meta["reset_hour"],
+            boundary_label(meta),
             meta["elapsed_days"],
             "  **current window**" if meta["is_current"] else "",
         ),
