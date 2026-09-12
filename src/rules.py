@@ -1,5 +1,7 @@
 from collections import Counter, defaultdict
 
+import context
+
 
 FAILED_CALLS = "failed_tool_calls"
 RETRIED_AFTER_FAILURE = "retried_after_failure"
@@ -87,34 +89,35 @@ def _by_session(records):
 def context_bloat(records, config):
     settings = config["thresholds"]["context_bloat"]
     threshold = settings["cache_read_per_turn"]
-    cache_read_weight = config["token_class_weights"]["cache_read"]
     findings = []
     for session_id, session in _by_session(records).items():
         if len(session) < settings["min_turns"]:
             continue
-        excess_tokens = 0
-        cost = 0.0
-        for record in session:
-            over = max(0, record["cache_read"] - threshold)
-            if over:
-                excess_tokens += over
-                cost += _model_weight(record, config) * cache_read_weight * over
-        if not excess_tokens:
+        summary = context.summarize_session(session, config)
+        if not summary["excess_tokens"]:
             continue
         findings.append(
             _finding(
                 "context_bloat",
                 session_id,
-                "session of %d turns re-read %s tokens of context above the %s-token threshold"
-                % (len(session), f"{excess_tokens:,}", f"{threshold:,}"),
-                cost,
+                context.detail(summary, threshold, config),
+                summary["carry_tax"],
                 {
-                    "turns": len(session),
-                    "excess_cache_read_tokens": excess_tokens,
-                    "peak_cache_read": max(r["cache_read"] for r in session),
-                    "cwd": session[-1]["cwd"],
-                    "first_ts": session[0]["ts"],
-                    "last_ts": session[-1]["ts"],
+                    "turns": summary["turns"],
+                    "excess_cache_read_tokens": summary["excess_tokens"],
+                    "peak_cache_read": summary["peak_cache_read"],
+                    "cwd": summary["cwd"],
+                    "first_ts": summary["first_ts"],
+                    "last_ts": summary["last_ts"],
+                    "growth_total": round(summary["growth_total"]),
+                    "growth_by_tool": [
+                        {"tool": entry["tool"], "tokens": round(entry["tokens"]), "results": entry["results"]}
+                        for entry in summary["growth_by_tool"][:5]
+                    ],
+                    "top_results": summary["top_results"],
+                    "compactions": summary["compactions"],
+                    "attributed_share": summary["attributed_share"],
+                    "tool_results_coverage": summary["tool_results_coverage"],
                 },
             )
         )

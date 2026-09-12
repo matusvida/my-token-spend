@@ -286,3 +286,19 @@ def test_tool_result_coverage_is_a_share_of_calls_not_of_turns():
     ]
     coverage = aggregate([old, fresh])["field_coverage"]["tool_results"]
     assert coverage == {"present": 1, "total": 3, "share": 1 / 3}
+
+
+def test_context_growth_is_aggregated_per_session_for_the_report():
+    threshold = CONFIG["thresholds"]["context_bloat"]["cache_read_per_turn"]
+    records = []
+    for i in range(13):
+        record = new_rec("2026-08-25T10:%02d:00+00:00" % i, cache_read=threshold + 10000 * i)
+        record["tools"] = [
+            {"name": "Bash", "hash": "h%d" % i, "tool_use_id": "c%d" % i, "result_chars": 5000, "is_error": False, "denied": False}
+        ]
+        records.append(record)
+    block = aggregate(records)["context"]
+    assert block["threshold"] == threshold
+    assert block["sessions"][0]["session"] == "s1"
+    assert block["sessions"][0]["growth_by_tool"][0]["tool"] == "Bash"
+    assert block["coverage"]["share"] == 1.0
