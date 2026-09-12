@@ -488,6 +488,36 @@ def _day_breakdown(records, tz):
     return [{"date": key, **buckets[key]} for key in sorted(buckets)]
 
 
+COVERAGE_FIELDS = (
+    "mcp_server",
+    "mcp_tool",
+    "plugin",
+    "per_turn_effort",
+    "stop_reason",
+    "cache_create_5m",
+    "cache_create_1h",
+    "compacted",
+    "after_compaction",
+    "source_tool_use_id",
+)
+
+
+def _coverage_entry(present, total):
+    return {"present": present, "total": total, "share": (present / total) if total else 0.0}
+
+
+def field_coverage(records):
+    covered = {
+        field: _coverage_entry(sum(1 for r in records if r.get(field) is not None), len(records))
+        for field in COVERAGE_FIELDS
+    }
+    calls = [tool for record in records for tool in record.get("tools") or []]
+    covered["tool_results"] = _coverage_entry(
+        sum(1 for tool in calls if tool.get("result_chars") is not None), len(calls)
+    )
+    return covered
+
+
 def aggregate_window(start_date, records, config, parse_stats, ceiling):
     tz = zone(config)
     start_local = datetime.combine(start_date, time_of_day(hour=config["reset_hour"]), tzinfo=tz)
@@ -513,7 +543,7 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling):
         bucket["weighted_cost"] += finding["weighted_cost"]
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": now.isoformat(),
         "window": {
             "key": window_key(start_date),
@@ -541,8 +571,11 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling):
         "by_branch": _breakdown(records, lambda r: r["gitBranch"]),
         "by_agent": _breakdown(records, lambda r: r["attributionAgent"]),
         "by_skill": _breakdown(records, lambda r: r["attributionSkill"]),
+        "by_mcp_server": _breakdown(records, lambda r: r.get("mcp_server")),
+        "by_plugin": _breakdown(records, lambda r: r.get("plugin")),
         "by_session": _session_breakdown(records),
         "unknown_models": _breakdown(unpriced_records(records, config), lambda r: r["model"]),
+        "field_coverage": field_coverage(records),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
         "ceiling": ceiling_block(ceiling, totals["weighted"], elapsed_days, now, end_local),

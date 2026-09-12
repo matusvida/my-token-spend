@@ -214,3 +214,75 @@ def test_projected_exhaustion_is_absent_for_a_closed_window():
     block = ceiling_at("2026-08-30T10:00:00Z")
     assert block["projected_exhaustion"] is None
     assert block["exhausts_before_reset"] is None
+
+
+def new_rec(ts, **overrides):
+    base = rec(ts)
+    base.update(
+        {
+            "mcp_server": None,
+            "mcp_tool": None,
+            "plugin": None,
+            "per_turn_effort": None,
+            "stop_reason": "end_turn",
+            "cache_create_5m": 0,
+            "cache_create_1h": 0,
+            "compacted": False,
+            "after_compaction": False,
+            "source_tool_use_id": None,
+        }
+    )
+    base.update(overrides)
+    return base
+
+
+def aggregate(records):
+    return collect.aggregate_window(date(2026, 8, 22), records, CONFIG, STATS, None)
+
+
+def test_the_schema_version_marks_the_records_that_carry_the_new_fields():
+    assert aggregate([new_rec("2026-08-25T10:00:00+00:00")])["schema_version"] == 2
+
+
+def test_spend_is_broken_down_by_mcp_server_and_plugin():
+    window = aggregate(
+        [
+            new_rec("2026-08-25T10:00:00+00:00", mcp_server="datadog-mcp", plugin="datadog", output=100),
+            new_rec("2026-08-25T11:00:00+00:00", mcp_server="datadog-mcp", plugin="datadog", output=200),
+            new_rec("2026-08-25T12:00:00+00:00", mcp_server="gitlab", plugin=None, output=50),
+        ]
+    )
+    assert [entry["key"] for entry in window["by_mcp_server"]] == ["datadog-mcp", "gitlab"]
+    assert window["by_mcp_server"][0]["turns"] == 2
+    assert [entry["key"] for entry in window["by_plugin"]] == ["datadog"]
+
+
+def test_records_written_before_the_new_fields_existed_still_aggregate():
+    window = aggregate([rec("2026-08-25T10:00:00+00:00", output=100)])
+    assert window["totals"]["turns"] == 1
+    assert window["by_mcp_server"] == []
+    assert window["field_coverage"]["mcp_server"]["share"] == 0.0
+
+
+def test_every_new_lens_states_the_share_of_turns_that_carry_its_field():
+    window = aggregate(
+        [
+            new_rec("2026-08-25T10:00:00+00:00", mcp_server="datadog-mcp"),
+            rec("2026-08-25T11:00:00+00:00"),
+        ]
+    )
+    assert window["field_coverage"]["mcp_server"] == {"present": 1, "total": 2, "share": 0.5}
+    assert window["field_coverage"]["stop_reason"]["share"] == 0.5
+    assert window["field_coverage"]["compacted"]["share"] == 0.5
+
+
+def test_tool_result_coverage_is_a_share_of_calls_not_of_turns():
+    old = rec("2026-08-25T10:00:00+00:00")
+    old["tools"] = [{"name": "Bash", "hash": "h1"}]
+    fresh = new_rec("2026-08-25T11:00:00+00:00")
+    fresh["tools"] = [
+        {"name": "Bash", "hash": "h2", "tool_use_id": "c1", "result_chars": 10, "is_error": False, "denied": False},
+        {"name": "Read", "hash": "h3", "tool_use_id": "c2", "result_chars": None, "is_error": None, "denied": None},
+    ]
+    coverage = aggregate([old, fresh])["field_coverage"]["tool_results"]
+    assert coverage == {"present": 1, "total": 3, "share": 1 / 3}
