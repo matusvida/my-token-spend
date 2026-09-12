@@ -6,7 +6,7 @@ PROMPT = "prompt"
 UNATTRIBUTED = "unattributed"
 TOP_RESULTS = 10
 MAX_SESSIONS = 10
-SERIES_POINTS = 600
+SERIES_POINTS = 300
 
 
 def _usage(record):
