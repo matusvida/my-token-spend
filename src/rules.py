@@ -2,6 +2,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 import context
+import text
 
 
 FAILED_CALLS = "failed_tool_calls"
@@ -218,14 +219,14 @@ def model_mismatch(records, config):
         _finding(
             "model_mismatch",
             model,
-            "%d %s turns produced at most %d output tokens with between 1 and %d tool call(s), at most %d "
+            "%d %s turns produced at most %d output tokens with %s, at most %d "
             "thinking tokens and no %s dispatch among them; they would have cost %s weighted tokens less "
             "on %s"
             % (
                 bucket["turns"],
                 model,
                 settings["max_output_tokens"],
-                settings["max_tool_calls"],
+                text.bounded(1, settings["max_tool_calls"], "tool call"),
                 settings.get("max_thinking", MAX_THINKING_DEFAULT),
                 DISPATCH_TOOL,
                 f"{bucket['cost']:,.0f}",

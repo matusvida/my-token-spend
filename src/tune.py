@@ -8,6 +8,7 @@ import agentfiles
 import collect
 import paths
 import rules
+import text
 
 PROPOSAL = "proposal"
 SETTING_PROPOSAL = "setting_proposal"
@@ -797,13 +798,13 @@ def _reconciliation(windows, current, entries, proposals, setting_proposals, con
             % (len(windows), _short(analysed["typical_weighted"]))
         )
     reasons.append(
-        "formula: the rule re-prices individual turns that produced at most %d output tokens with between 1 "
-        "and %d tool call(s), at most %d thinking tokens and no Agent dispatch among them. A proposal here "
+        "formula: the rule re-prices individual turns that produced at most %d output tokens with %s, "
+        "at most %d thinking tokens and no Agent dispatch among them. A proposal here "
         "prices a whole component instead - its typical window cost x the share of the window that ran "
         "above %s x the price gap - and only where a file or a setting can carry the change."
         % (
             thresholds["max_output_tokens"],
-            thresholds["max_tool_calls"],
+            text.bounded(1, thresholds["max_tool_calls"], "tool call"),
             thresholds.get("max_thinking", rules.MAX_THINKING_DEFAULT),
             thresholds["downgrade_model"],
         )

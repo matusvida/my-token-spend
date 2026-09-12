@@ -1,6 +1,7 @@
 import agentfiles
 import paths
 import rules
+import text
 
 WASTE = "waste"
 STRATEGY = "strategy"
@@ -114,7 +115,7 @@ def _model_downgrades(findings, config):
                 "Run short, single-tool %s turns on %s" % (finding["subject"], target),
                 "Add `\"model\": \"%s\"` to the agent definitions that only fetch, grep or confirm, "
                 "and open one-tool sessions with `/model %s`." % (target, _model_family(target)),
-                "%d turns produced at most %d output tokens with between 1 and %d tool call(s), at most "
+                "%d turns produced at most %d output tokens with %s, at most "
                 "%d thinking tokens and no Agent dispatch among them. Priced at %s they cost this much "
                 "less. Only the token counts are identical: a tier change is a quality tradeoff, and "
                 "whether the cheaper tier reaches the same answers is recorded nowhere in this data. The "
@@ -123,7 +124,7 @@ def _model_downgrades(findings, config):
                 % (
                     turns,
                     config["thresholds"]["model_mismatch"]["max_output_tokens"],
-                    config["thresholds"]["model_mismatch"]["max_tool_calls"],
+                    text.bounded(1, config["thresholds"]["model_mismatch"]["max_tool_calls"], "tool call"),
                     config["thresholds"]["model_mismatch"].get("max_thinking", rules.MAX_THINKING_DEFAULT),
                     target,
                 ),
@@ -154,8 +155,8 @@ def _deduplicate_reads(findings):
                 "Stop re-reading the same %s input" % tool,
                 "Ask for the file or command output once per session and refer back to it; where a subagent "
                 "needs it too, pass the content in its prompt instead of letting it re-run %s." % tool,
-                "%d repeat groups, %d calls with a byte-identical input beyond the first."
-                % (bucket["findings"], bucket["occurrences"] - bucket["findings"]),
+                "%s, %d calls with a byte-identical input beyond the first."
+                % (text.plural(bucket["findings"], "repeat group"), bucket["occurrences"] - bucket["findings"]),
                 bucket["cost"],
                 "none",
                 "medium",

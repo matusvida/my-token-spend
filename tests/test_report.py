@@ -1737,3 +1737,38 @@ def test_the_burn_endpoint_label_sits_above_the_dot_when_there_is_room():
     dot = float(re.search(r'class="end-dot" cx="[0-9.]+" cy="(-?[0-9.]+)"', svg).group(1))
     label = float(re.search(r'<text class="value-label" x="[0-9.]+" y="(-?[0-9.]+)"', svg).group(1))
     assert label < dot
+
+
+def test_a_single_repeat_group_is_not_reported_in_the_plural():
+    import advice
+
+    findings = [finding("redundant_reads", "Bash", 3_300_000.0)]
+    findings[0]["evidence"] = {"tool": "Bash", "occurrences": 9}
+    detail = advice._deduplicate_reads(findings)[0]["detail"]
+    assert detail.startswith("1 repeat group,")
+
+
+def test_an_equal_tool_call_range_collapses_to_exactly_one():
+    import text
+
+    assert text.bounded(1, 1, "tool call") == "exactly 1 tool call"
+    assert text.bounded(1, 3, "tool call") == "between 1 and 3 tool calls"
+    assert text.bounded(2, 2, "tool call") == "exactly 2 tool calls"
+
+
+def test_the_mismatch_detail_collapses_a_degenerate_tool_call_range():
+    import copy
+
+    config = copy.deepcopy(CONFIG)
+    config["thresholds"]["model_mismatch"]["max_tool_calls"] = 1
+    records = [
+        record("2026-08-22T10:0%d:00+00:00" % index, "u%d" % index, tools=[{"name": "Read", "hash": "h"}])
+        for index in range(3)
+    ]
+    for entry in records:
+        entry.update({"output": 100, "thinking": 20, "model": "claude-opus-5"})
+    import rules
+
+    detail = rules.model_mismatch(records, config)[0]["detail"]
+    assert "exactly 1 tool call," in detail
+    assert "tool call(s)" not in detail

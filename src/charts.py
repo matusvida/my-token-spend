@@ -2,6 +2,8 @@ import html
 from collections import Counter
 from datetime import datetime, timezone
 
+import text
+
 
 def clip(text, limit):
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
@@ -714,8 +716,13 @@ def svg_scatter(chart, height=320):
                 y_at(point["thinking"]),
                 colors.get(point["model"], OTHER),
                 esc(
-                    "%s\n%d tool call(s), %s output tokens, %s thinking"
-                    % (point["model"], point["tools"], exact(point["output"]), exact(point["thinking"]))
+                    "%s\n%s, %s output tokens, %s thinking"
+                    % (
+                        point["model"],
+                        text.plural(point["tools"], "tool call"),
+                        exact(point["output"]),
+                        exact(point["thinking"]),
+                    )
                 ),
             )
         )
