@@ -1452,3 +1452,21 @@ def test_the_burn_chart_zero_fills_every_calendar_day_from_the_window_start():
     assert days[0]["weighted"] == 0.0
     assert days[3]["weighted"] == 0.0
     assert report._burn_chart(window).count("weighted spent so far") == 5
+
+
+def test_the_mismatch_chart_survives_a_config_without_a_thinking_threshold():
+    import copy
+
+    import evidence
+    import rules
+
+    config = copy.deepcopy(CONFIG)
+    del config["thresholds"]["model_mismatch"]["max_thinking"]
+    records = [
+        record("2026-08-22T10:0%d:00+00:00" % index, "u%d" % index, tools=[{"name": "Read", "hash": "h"}])
+        for index in range(3)
+    ]
+    for entry in records:
+        entry.update({"output": 100, "thinking": 20, "model": "claude-opus-5"})
+    chart = evidence._mismatch_chart(records, config)
+    assert chart["box"]["thinking"] == rules.MAX_THINKING_DEFAULT

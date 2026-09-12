@@ -120,10 +120,9 @@ def _mismatch_chart(records, config):
     expensive = sorted(ranked, key=lambda model: (-weight[model], model))[:3]
     outputs = sorted(record["output"] for record in sampled)
     axis_max = max(outputs[int(0.95 * (len(outputs) - 1))], 4 * settings["max_output_tokens"])
+    max_thinking = settings.get("max_thinking", rules.MAX_THINKING_DEFAULT)
     thinking_values = sorted((record.get("thinking") or 0) for record in sampled)
-    thinking_max = max(
-        thinking_values[int(0.95 * (len(thinking_values) - 1))], 4 * settings["max_thinking"]
-    )
+    thinking_max = max(thinking_values[int(0.95 * (len(thinking_values) - 1))], 4 * max_thinking)
     points = [
         {
             "tools": len(record["tools"]),
@@ -141,7 +140,7 @@ def _mismatch_chart(records, config):
         "box": {
             "output": settings["max_output_tokens"],
             "tools": settings["max_tool_calls"],
-            "thinking": settings["max_thinking"],
+            "thinking": max_thinking,
         },
         "axis_max": axis_max,
         "thinking_max": thinking_max,
