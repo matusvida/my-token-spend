@@ -10,7 +10,10 @@ import sys
 import traceback
 
 import advice
+import charts
 import collect
+import cost
+import evidence
 import paths
 import rootcause
 from charts import (
@@ -20,11 +23,16 @@ from charts import (
     exact,
     legend,
     meter,
+    nice_ticks,
     percent,
     signed_compact,
+    svg_burn,
+    svg_context_series,
     svg_diverging_bars,
     svg_lines,
     svg_ranked_bars,
+    svg_run_timeline,
+    svg_scatter,
     svg_stacked_columns,
     table,
     table_view,
@@ -43,7 +51,7 @@ def default_config_path():
     return str(paths.effective_config_path())
 
 
-REPORT_FORMAT_VERSION = 2
+REPORT_FORMAT_VERSION = 3
 
 DEFAULT_NARRATIVE_MODEL = "sonnet"
 
@@ -128,7 +136,10 @@ def analysis_for(window, config, data_dir=None):
         return None, store
     try:
         calls = collect.load_agent_calls(os.path.join(data_dir or default_data_dir(), "records"))
-        return rootcause.analyse(window, records, config, calls), store
+        analysis = rootcause.analyse(window, records, config, calls)
+        if analysis is not None:
+            analysis["evidence"] = evidence.build(window, records, config, calls)
+        return analysis, store
     except (KeyError, TypeError, ValueError) as error:
         store["analysis_error"] = "%s: %s" % (type(error).__name__, error)
         print(
@@ -343,6 +354,14 @@ STYLE = """
   --border: rgba(11,11,11,0.10);
   --series-1: #2a78d6;
   --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-other: #898781;
+  --marker: #d03b3b;
   --delta-up: #d03b3b;
   --delta-down: #2a78d6;
   --meter-track: #cde2fb;
@@ -364,6 +383,14 @@ STYLE = """
     --border: rgba(255,255,255,0.10);
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --series-other: #898781;
+    --marker: #e66767;
     --delta-up: #d03b3b;
     --delta-down: #3987e5;
     --meter-track: #184f95;
@@ -381,6 +408,14 @@ STYLE = """
   --border: rgba(255,255,255,0.10);
   --series-1: #3987e5;
   --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --series-other: #898781;
+  --marker: #e66767;
   --delta-up: #d03b3b;
   --delta-down: #3987e5;
   --meter-track: #184f95;
@@ -507,6 +542,16 @@ ol.actions li { margin-bottom: 10px; }
   margin: 8px 0 0; border: 0; padding: 0; background: transparent; border-radius: 0;
 }
 .raw > details > section.card > h2 { font-size: 14px; color: var(--text-secondary); margin: 4px 0 6px; }
+
+.marker { stroke: var(--marker); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.dot { stroke: var(--surface-1); stroke-width: 1.5; }
+.region { fill: var(--grid); fill-opacity: 0.5; stroke: var(--baseline); stroke-dasharray: 4 3; }
+.region-label { fill: var(--muted); font-size: 11px; }
+.finding { scroll-margin-top: 14px; }
+.finding-threshold { font-size: 12px; color: var(--muted); margin: 2px 0 10px; }
+.chart-note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.lane { margin-top: 24px; }
+a { color: var(--series-1); }
 
 #tooltip {
   position: fixed; pointer-events: none; opacity: 0; transition: opacity 90ms ease;
@@ -766,7 +811,7 @@ def _breakdown(title, note, rows, total, key_label="key"):
                     ]
                     for row in rows
                 ],
-                "Table view - %s" % title,
+                "Numbers",
             ),
         )
     )
@@ -896,15 +941,48 @@ def _findings_section(window):
     )
 
 
+WORD_CAP = 1500
+
+TAG = re.compile(r"(<[^>]+>)")
+
+
+def visible_words(page):
+    body = re.search(r"<main>(.*)</main>", page, re.S)
+    text = body.group(1) if body else page
+    text = re.sub(r"<(script|style)\b.*?</\1>", " ", text, flags=re.S)
+    kept = []
+    depth = 0
+    summary = False
+    for token in TAG.split(text):
+        if token.startswith("<") and token.endswith(">"):
+            name = token[1:-1].split()[0].lower() if len(token) > 2 else ""
+            if name == "details":
+                depth += 1
+            elif name == "/details":
+                depth = max(0, depth - 1)
+            elif name == "summary":
+                summary = True
+            elif name == "/summary":
+                summary = False
+            continue
+        if depth == 0 or summary:
+            kept.append(token)
+    return len(html.unescape(" ".join(kept)).split())
+
+
 GROUP_TITLES = [
-    ("waste", "Waste - cut it", "Same result, fewer tokens. Nothing here changes what you get back."),
+    ("waste", "Waste - cut it", "Same result, fewer tokens."),
     (
         "strategy",
         "Strategy cost - tune it, never cut it",
-        "Orchestration is the point, not the problem. These right-size the workers and the batch size; "
-        "none of them say run fewer agents.",
+        "Right-size the workers and the batch size; never run fewer agents.",
     ),
-    ("hygiene", "Hygiene - cheap habits", "Small changes to how a session is opened and fed."),
+    ("hygiene", "Hygiene - cheap habits", "How a session is opened and fed."),
+    (
+        "headroom",
+        "Headroom - quota you did not use",
+        "Work on a cheaper tier than it needs.",
+    ),
 ]
 
 RISK_WORDS = {"none": "no performance risk", "low": "low performance risk", "medium": "medium performance risk"}
@@ -913,7 +991,8 @@ RISK_WORDS = {"none": "no performance risk", "low": "low performance risk", "med
 def _recommendation_card(item):
     return (
         '<div class="rec"><div><div class="rec-title">%s</div>'
-        '<div class="rec-action">%s</div><div class="rec-detail">%s</div></div>'
+        '<details><summary>What to change</summary>'
+        '<div class="rec-action">%s</div><div class="rec-detail">%s</div></details></div>'
         '<div class="rec-figures"><div class="rec-saving">%s</div>'
         '<div class="rec-share">%s of the window</div>'
         '<div class="badge risk-%s"><span class="dot"></span>%s</div>'
@@ -944,8 +1023,7 @@ def _protected_agents(window, recommendations):
         return ""
     names = ", ".join("%s (%s)" % (row["key"], compact(row["weighted"])) for row in protected)
     return (
-        '<p class="sub">Deliberately left alone: %s. These carry judgement, not mechanical checks, so no '
-        "downgrade is recommended for them.</p>" % esc(names)
+        '<p class="sub">Left alone, as judgement work: %s.</p>' % esc(names)
     )
 
 
@@ -957,7 +1035,7 @@ def _recommendations_section(window, recommendations):
         )
     bars = [
         {
-            "label": item["title"],
+            "label": clip(item["title"], 26),
             "value": item["weighted_saving"],
             "tip": "%s\n%s weighted (%s of the window)\n%s, %s confidence"
             % (
@@ -984,14 +1062,9 @@ def _recommendations_section(window, recommendations):
         )
     return (
         '<section class="card"><h2>Recommendations</h2>'
-        '<p class="sub">Cut spend while keeping or improving what you get back. Every saving below is derived '
-        "from a rule that fired on this window - none of them are guesses. The chart is ordered by size; the "
-        "cards below it are ordered by saving weighted by how well the rule supports it.</p>"
-        '<div class="notice">Each figure comes from <strong>one</strong> rule, and the rules overlap by design '
-        "(a turn can be a whale, part of a storm and part of an agent-type skew at once). They are therefore "
-        "shown separately and <strong>never added into a total</strong>; the largest single saving is the "
-        "honest headline.</div>"
-        '<div class="chart-wrap">%s</div>%s%s</section>'
+        '<p class="sub">Every saving comes from one rule that fired on this window. The rules overlap by '
+        "design, so the figures are shown separately and <strong>never added into a total</strong>.</p>"
+        '<details><summary>Ranked overview</summary><div class="chart-wrap">%s</div></details>%s%s</section>'
         % (
             svg_ranked_bars(bars, label_width=330),
             "".join(groups),
@@ -1009,7 +1082,7 @@ def _recommendations_section(window, recommendations):
                     ]
                     for item in recommendations
                 ],
-                "Table view - recommendations",
+                "Numbers",
             ),
         )
     )
@@ -1079,96 +1152,6 @@ def _headline_section(window, previous):
     )
 
 
-def _verdict_lines(window, previous):
-    ceiling = window["ceiling"]
-    percent_used = ceiling.get("percent_used")
-    burn = ceiling.get("burn_rate_per_day") or 0
-    delta = total_delta(previous, window)
-    return [
-        (
-            "Window position",
-            percent(percent_used) if percent_used is not None else "unknown",
-            "of %s (%s), %s left"
-            % (
-                compact(ceiling.get("estimate") or 0),
-                collect.ceiling_phrase(ceiling),
-                compact(ceiling.get("remaining_weighted") or 0),
-            ),
-        ),
-        ("Burn rate", "%s / day" % compact(burn), budget_qualifier(ceiling)),
-        (
-            "vs previous window",
-            signed_compact(delta) if delta is not None else "-",
-            previous["window"]["key"] if previous else "no earlier window on disk",
-        ),
-    ]
-
-
-def _action_items(recommendations):
-    if not recommendations:
-        return (
-            '<p class="sub">No rule produced a recommendation above the reporting threshold this window, '
-            "so there is no ranked action list.</p>"
-        )
-    items = "".join(
-        "<li><strong>%s</strong> &mdash; %s weighted, %s of the window; %s, %s confidence"
-        '<div class="rec-detail">%s</div></li>'
-        % (
-            esc(item["title"]),
-            esc(compact(item["weighted_saving"])),
-            esc(percent(item["percent_of_window"])),
-            esc(RISK_WORDS[item["performance_risk"]]),
-            esc(item["confidence"]),
-            _inline_code(item["action"]),
-        )
-        for item in recommendations[:3]
-    )
-    return '<ol class="actions">%s</ol>' % items
-
-
-def _verdict_section(window, previous, recommendations):
-    ceiling = window["ceiling"]
-    meter_html = ""
-    if ceiling.get("percent_used") is not None:
-        meter_html = meter(
-            ceiling["percent_used"] / 100.0,
-            "%s of an estimated %s weighted-token ceiling, %s remaining"
-            % (
-                percent(ceiling["percent_used"]),
-                compact(ceiling["estimate"]),
-                compact(ceiling.get("remaining_weighted") or 0),
-            ),
-        )
-    tiles = "".join(
-        '<div class="tile"><div class="tile-label">%s</div><div class="tile-value">%s</div>'
-        '<div class="tile-note">%s</div></div>' % (esc(label), esc(value), esc(note))
-        for label, value, note in _verdict_lines(window, previous)
-    )
-    return (
-        '<section class="card verdict"><h2>Verdict</h2>'
-        '<div class="hero-value">%s</div>'
-        '<div class="hero-unit">weighted tokens spent in %s (%s to %s, %s), across %s turns in %s sessions</div>'
-        '%s<div class="tiles">%s</div>'
-        "<h3>Do these first</h3>%s"
-        '<div class="notice">Savings are upper bounds from single rules, they overlap, and they are never '
-        "added together. Cost is not waste: every figure here is the price of work that was done, and the "
-        "quality effect of changing it is not measurable from this data.</div>"
-        "</section>"
-        % (
-            esc(compact(window["totals"]["weighted"])),
-            esc(window["window"]["key"]),
-            esc(window["window"]["start"]),
-            esc(window["window"]["end"]),
-            esc(window["window"]["timezone"]),
-            esc(exact(window["totals"]["turns"])),
-            esc(exact(window["totals"]["sessions"])),
-            meter_html,
-            tiles,
-            _action_items(recommendations),
-        )
-    )
-
-
 def _finding_subject(finding):
     subject = finding.get("subject") or "-"
     return subject[:8] if len(subject) > 20 else subject
@@ -1196,9 +1179,8 @@ def _because_block(because, analysis, store):
     if because:
         points = "".join("<li>%s</li>" % esc(point) for point in because["points"])
         return (
-            '<div class="because">%s</div>'
-            "<details><summary>Evidence</summary><ul>%s</ul></details>"
-            % (esc(because["text"]), points)
+            '<details><summary>Work behind it</summary>'
+            '<div class="because">%s</div><ul>%s</ul></details>' % (esc(because["text"]), points)
         )
     if analysis is None:
         return (
@@ -1211,45 +1193,447 @@ def _because_block(because, analysis, store):
     )
 
 
-def _root_cause_section(window, analysis, store):
-    findings = sorted(
-        enumerate(window["findings"]), key=lambda pair: (-pair[1]["weighted_cost"], pair[1]["rule"])
+def _tile(label, value, note):
+    return (
+        '<div class="tile"><div class="tile-label">%s</div><div class="tile-value">%s</div>'
+        '<div class="tile-note">%s</div></div>' % (esc(label), esc(value), esc(note))
     )
-    becauses = (analysis or {}).get("becauses") or []
-    limit = (analysis or {}).get("max_findings") or 12
-    blocks = []
-    for index, finding in findings[:limit]:
-        because = becauses[index] if index < len(becauses) else None
-        blocks.append(
-            '<div class="finding"><div class="finding-head"><span class="finding-rule">%s</span>'
-            '<span class="finding-subject">%s</span><span class="finding-cost">%s weighted</span></div>'
-            '<div class="finding-detail">%s</div>%s</div>'
-            % (
-                esc(RULE_LABELS.get(finding["rule"], finding["rule"])),
-                esc(_finding_subject(finding)),
-                esc(compact(finding["weighted_cost"])),
-                esc(finding["detail"]),
-                _because_block(because, analysis, store),
-            )
+
+
+def unattributed_subagent(window):
+    named = sum(row["weighted"] for row in window["by_agent"])
+    sidechain = window["totals"]["sidechain_weighted"]
+    return max(0.0, sidechain - named), sidechain
+
+
+def usd_value(window):
+    usd = (window.get("cost_usd") or {}).get("usd")
+    return "unknown" if usd is None else "$%.2f" % usd
+
+
+def reset_label(window):
+    return "reset %s UTC" % window["window"]["end_utc"][:16].replace("T", " ")
+
+
+def _burn_chart(window):
+    days = window["by_day"]
+    if not days:
+        return ""
+    cumulative = []
+    running = 0.0
+    for day in days:
+        running += day["weighted"]
+        cumulative.append(running)
+    return '<div class="chart-wrap">%s</div>' % svg_burn(
+        [day["date"][5:] for day in days],
+        cumulative,
+        window["ceiling"].get("estimate"),
+        reset_label(window),
+    )
+
+
+def _verdict_section(window, previous, recommendations):
+    ceiling = window["ceiling"]
+    totals = window["totals"]
+    unattributed, sidechain = unattributed_subagent(window)
+    cost_block = window.get("cost_usd") or {}
+    tiles = [
+        _tile(
+            "%s used" % ("Quota" if collect.quota_is_known(ceiling) else "Ceiling"),
+            percent(ceiling["percent_used"]) if ceiling.get("percent_used") is not None else "unknown",
+            collect.ceiling_method_text(ceiling)
+            if collect.quota_is_known(ceiling)
+            else "quota unknown this window, ceiling estimated from your own heavy weeks",
+        ),
+        _tile(
+            "Weighted spent",
+            compact(totals["weighted"]),
+            "%s turns, %s sessions" % (exact(totals["turns"]), exact(totals["sessions"])),
+        ),
+        _tile("List price", usd_value(window), cost_block.get("label") or cost.LABEL),
+        _tile(
+            "Unattributed subagent spend",
+            percent(100.0 * unattributed / sidechain) if sidechain else "-",
+            "of %s weighted on subagents" % compact(sidechain),
+        ),
+    ]
+    return (
+        '<section class="card verdict"><h2>%s</h2>'
+        '<p class="sub">%s to %s, %s.</p>'
+        '<div class="tiles">%s</div>%s</section>'
+        % (
+            esc(window["window"]["key"]),
+            esc(window["window"]["start"]),
+            esc(window["window"]["end"]),
+            esc(window["window"]["timezone"]),
+            "".join(tiles),
+            _burn_chart(window),
         )
-    if not blocks:
-        blocks.append('<p class="sub">No rule fired on this window.</p>')
-    remainder = max(0, len(findings) - limit)
+    )
+
+
+REC_RULES = {
+    "model_downgrade": "model_mismatch",
+    "deduplicate_reads": "redundant_reads",
+    "break_retry_loops": "loop_retry",
+    "right_size_agent_tier": "agent_type_skew-0",
+    "right_size_fan_out": "subagent_storm-0",
+    "reset_context": "context_bloat-0",
+    "split_whale_turns": "whale_turns",
+}
+
+OVERLAP_NOTICE = (
+    '<div class="notice">Savings are upper bounds from single rules, they overlap, and they are never '
+    "added together. Cost is not waste: every figure is the price of work that was done, and the quality "
+    "effect of changing it is not measurable from this data.</div>"
+)
+
+
+def _action_card(item, anchors, config):
+    anchor = REC_RULES.get(item["kind"])
+    rule = (anchor or "").split("-")[0]
+    threshold = evidence.threshold_text(rule, config) if rule else ""
+    link = (
+        '<a href="#%s">see the chart</a>' % esc(anchor)
+        if anchor in anchors
+        else "no chart: the rule behind it did not fire on this window"
+    )
+    return (
+        '<div class="rec"><div><div class="rec-title">%s</div>'
+        '<div class="rec-action">Counted at %s.</div><div class="rec-detail">%s</div></div>'
+        '<div class="rec-figures"><div class="rec-saving">%s</div>'
+        '<div class="rec-share">%s of the window</div>'
+        '<div class="badge risk-%s"><span class="dot"></span>%s</div>'
+        '<div class="badge">%s confidence</div></div></div>'
+        % (
+            esc(item["title"]),
+            esc(threshold or "the rule threshold"),
+            link,
+            esc(compact(item["weighted_saving"])),
+            esc(percent(item["percent_of_window"])),
+            esc(item["performance_risk"]),
+            esc(RISK_WORDS[item["performance_risk"]]),
+            esc(item["confidence"]),
+        )
+    )
+
+
+def _actions_section(recommendations, anchors, config):
+    if not recommendations:
+        return (
+            '<section class="card"><h2>Do these first</h2>'
+            '<p class="sub">No rule cleared the reporting threshold this window.</p>%s</section>'
+            % OVERLAP_NOTICE
+        )
+    cards = "".join(_action_card(item, anchors, config) for item in recommendations[:3])
+    return '<section class="card"><h2>Do these first</h2>%s%s</section>' % (cards, OVERLAP_NOTICE)
+
+
+def _legend_of(names):
+    colours = charts.color_map(names)
+    return legend([{"name": name, "color": colours[name]} for name in names])
+
+
+def _context_chart_html(chart):
+    names = [entry["tool"] for entry in chart["by_tool"][:5]]
+    note = "Height is the context carried, colour the tool that grew it"
+    if chart.get("compactions"):
+        note += "; dashed lines are the %s" % _plural(len(chart["compactions"]), "compaction")
+    note += "."
+    rows = [
+        [entry["tool"], exact(entry["tokens"]), exact(entry["results"])]
+        for entry in chart["by_tool"]
+    ]
+    return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
+        _legend_of(names),
+        svg_context_series(chart),
+        esc(note),
+        table_view(["tool", "context tokens it grew", "results"], rows, "Numbers"),
+    )
+
+
+def _timeline_chart_html(chart):
+    note = "One bar per run on the clock, thickness by turns; %s." % (
+        rootcause.description_note_of(chart["descriptions"])
+    )
+    if chart["hidden"]:
+        note += " %s not drawn." % _plural(chart["hidden"], "smaller run")
+    rows = [
+        [run["label"], run["agent"], run["first_ts"][11:16], run["last_ts"][11:16], exact(run["turns"]), exact(run["weighted"])]
+        for run in chart["runs"]
+    ]
+    return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
+        legend([{"name": "named by the orchestrator", "color": "--series-1"},
+                {"name": "label derived from tools", "color": charts.OTHER}]),
+        svg_run_timeline(chart),
+        esc(note),
+        table_view(["run", "agent type", "from", "to", "turns", "weighted"], rows, "Numbers"),
+    )
+
+
+def _scatter_chart_html(chart):
+    note = "%s of %s tool-calling turns, x jittered, dot size by thinking tokens." % (
+        exact(chart["plotted"]),
+        exact(chart["total"]),
+    )
+    return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>" % (
+        _legend_of(chart["models"]),
+        svg_scatter(chart),
+        esc(note),
+    )
+
+
+def _cluster_chart_html(chart):
+    rows = [
+        {
+            "label": clip(row["label"], 28),
+            "value": row["weighted"],
+            "color": charts.OTHER if row["confidence"] == "residual" else "--series-1",
+            "tip": "%s\n%s weighted\n%s, %s"
+            % (row["label"], exact(row["weighted"]), _plural(row["runs"], "run"), row["confidence"]),
+        }
+        for row in chart["rows"][:6]
+    ]
+    note = rootcause.description_note_of(chart["descriptions"]) + "."
+    if chart.get("tail_note"):
+        note += " " + chart["tail_note"] + "."
+    return "<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
+        svg_ranked_bars(rows, label_width=320),
+        esc(note),
+        table_view(
+            ["job", "runs", "weighted", "confidence"],
+            [[row["label"], exact(row["runs"]), exact(row["weighted"]), row["confidence"]] for row in chart["rows"]],
+            "Numbers",
+        ),
+    )
+
+
+def _whale_chart_html(chart):
+    series = [
+        {"name": name, "color": charts.CATEGORICAL[index]} for index, name in enumerate(chart["series"])
+    ]
+    categories = [
+        {
+            "label": row["label"],
+            "sublabel": None,
+            "parts": row["parts"],
+            "tips": [
+                "%s at %s\n%s: %s weighted" % (row["model"], row["label"], name, exact(value))
+                for name, value in zip(chart["series"], row["parts"])
+            ],
+        }
+        for row in chart["rows"]
+    ]
+    return "%s<div class=\"chart-wrap\">%s</div><p class=\"chart-note\">%s</p>%s" % (
+        legend(series),
+        svg_stacked_columns(categories, series),
+        esc("One bar per turn, split by token class, labelled with its clock time."),
+        table_view(
+            ["when", "model", "agent", "weighted"],
+            [[row["label"], row["model"], row["agent"], exact(row["weighted"])] for row in chart["rows"]],
+            "Numbers",
+        ),
+    )
+
+
+def _repeat_chart_html(chart):
+    rows = [
+        [row["tool"], exact(row["repeats"]), row["first"], row["last"], exact(row["weighted"])]
+        for row in chart["rows"]
+    ]
+    note = "The stored hash identifies identical input; the text is not stored."
+    if chart["hidden"]:
+        note += " %d more in the raw breakdowns." % chart["hidden"]
+    return '<div class="table-wrap">%s</div><p class="chart-note">%s</p>' % (
+        table(["tool", "repeats", "first", "last", "weighted"], rows),
+        esc(note),
+    )
+
+
+def _round_trip_chart_html(chart):
+    rows = [
+        [row["tool"], exact(row["failures"]), exact(row["retries"]), exact(row["denied"]), exact(row["weighted"])]
+        for row in chart["rows"]
+    ]
+    note = "An outcome is recorded on %s of %s calls; the rest are not counted." % (
+        percent(100.0 * chart["coverage"]),
+        exact(chart["calls"]),
+    )
+    return '<div class="table-wrap">%s</div><p class="chart-note">%s</p>' % (
+        table(["tool", "failed", "failed again", "denied", "weighted"], rows),
+        esc(note),
+    )
+
+
+CHART_HTML = {
+    "context_series": _context_chart_html,
+    "run_timeline": _timeline_chart_html,
+    "scatter": _scatter_chart_html,
+    "cluster_bars": _cluster_chart_html,
+    "whale_bars": _whale_chart_html,
+    "repeat_table": _repeat_chart_html,
+    "round_trip_table": _round_trip_chart_html,
+}
+
+
+def _plural(count, word):
+    return "%d %s%s" % (count, word, "" if count == 1 else "s")
+
+
+def _claim(card, window):
+    findings = card["findings"]
+    if len(findings) == 1:
+        return findings[0]["detail"]
+    total = sum(finding["weighted_cost"] for finding in findings)
+    share = percent(100.0 * total / window["totals"]["weighted"]) if window["totals"]["weighted"] else "-"
+    if card["rule"] == "whale_turns":
+        return "the %s costliest turns cost %s weighted, %s of the window" % (
+            len(findings),
+            exact(total),
+            share,
+        )
+    if card["rule"] == "model_mismatch":
+        return findings[0]["detail"]
+    return "%s cost %s weighted, %s of the window" % (
+        _plural(len(findings), "repeat group"),
+        exact(total),
+        share,
+    )
+
+
+def _card_subject(card):
+    findings = card["findings"]
+    if len(findings) != 1:
+        return "%s findings" % len(findings)
+    return _finding_subject(findings[0])
+
+
+def _finding_card(card, window, analysis, store):
+    chart = card["chart"]
+    body = CHART_HTML[chart["kind"]](chart) if chart else (
+        '<p class="sub">The stored records carry nothing further about this finding, so it has no chart.</p>'
+    )
+    becauses = analysis.get("becauses") or []
+    because = becauses[card["index"]] if card["index"] < len(becauses) else None
     tail = (
-        '<p class="sub">%d further finding(s) are not listed here; the full ranked table is under Rule lenses.</p>'
-        % remainder
-        if remainder
+        '<p class="chart-note">%d further %s finding(s) are in the raw breakdowns.</p>'
+        % (card["hidden"], RULE_LABELS.get(card["rule"], card["rule"]))
+        if card["hidden"]
         else ""
     )
     return (
-        '<section class="card"><h2>Findings, and what the work behind them was</h2>'
-        '<p class="sub">Ranked by weighted cost. Each &ldquo;work behind it&rdquo; line is derived from the '
-        "stored records for this window &mdash; the runs, agents, skills, repos, branches, timestamps and tool "
-        "calls the turns actually carry.</p>"
-        '<div class="notice">These lines say <strong>what the work was</strong>, never why anyone chose it. '
-        "Intent is not in this data, so nothing here claims a decision was wrong, a component unnecessary, or "
-        "a cost avoidable. Rule findings overlap and are never summed.</div>"
-        "%s%s</section>" % ("".join(blocks), tail)
+        '<div class="finding" id="%s"><div class="finding-head"><span class="finding-rule">%s</span>'
+        '<span class="finding-subject">%s</span><span class="finding-cost">%s weighted</span></div>'
+        '<div class="finding-detail">%s</div>'
+        '<div class="finding-threshold">Counted at %s.</div>%s%s%s</div>'
+        % (
+            esc(card["id"]),
+            esc(RULE_LABELS.get(card["rule"], card["rule"])),
+            esc(_card_subject(card)),
+            esc(compact(card["weighted_cost"])),
+            esc(_sentence_case(_claim(card, window))),
+            esc(card["threshold"]),
+            body,
+            tail,
+            _because_block(because, analysis, store),
+        )
+    )
+
+
+def _findings_cards_section(window, analysis, store):
+    if analysis is None or not analysis.get("evidence"):
+        return (
+            '<section class="card"><h2>Findings</h2><p class="sub">%s, so no finding can be charted.</p></section>'
+            % _sentence_case(_store_reason(store, detail=True))
+        )
+    built = list(analysis["evidence"]["cards"])
+    chart = analysis["evidence"].get("round_trip_chart")
+    if chart:
+        built.append(
+            {
+                "id": evidence.ROUND_TRIPS,
+                "rule": evidence.ROUND_TRIPS,
+                "findings": [],
+                "index": -1,
+                "hidden": 0,
+                "weighted_cost": sum(item["weighted_cost"] for item in analysis["evidence"]["round_trips"]["detectors"]),
+                "threshold": evidence.threshold_text(evidence.ROUND_TRIPS, {}),
+                "chart": chart,
+            }
+        )
+    cards = []
+    for card in built:
+        if card["rule"] == evidence.ROUND_TRIPS:
+            cards.append(_round_trip_card(card))
+            continue
+        cards.append(_finding_card(card, window, analysis, store))
+    return (
+        '<section class="card"><h2>Findings</h2>'
+        '<div class="notice">One chart or table is the evidence. Lenses overlap, are never summed, and '
+        "nothing here says why anyone chose the work.</div>"
+        "%s</section>" % "".join(cards)
+    )
+
+
+def _round_trip_card(card):
+    return (
+        '<div class="finding" id="%s"><div class="finding-head"><span class="finding-rule">round trips</span>'
+        '<span class="finding-subject">%s failed</span><span class="finding-cost">%s weighted</span></div>'
+        '<div class="finding-detail">Tool calls that came back as an error, and the calls that failed again '
+        "on the same input.</div>"
+        '<div class="finding-threshold">Counted at %s.</div>%s</div>'
+        % (
+            esc(card["id"]),
+            esc(exact(sum(row["failures"] for row in card["chart"]["rows"]))),
+            esc(compact(card["chart"]["detectors"][0]["weighted_cost"])),
+            esc(card["threshold"]),
+            _round_trip_chart_html(card["chart"]),
+        )
+    )
+
+
+def _lane_block(lane, total):
+    rows = [
+        {
+            "label": clip(row["label"], 26),
+            "value": row["weighted"],
+            "tip": "%s\n%s weighted (%s of the window)"
+            % (row["label"], exact(row["weighted"]), percent(100.0 * row["weighted"] / total) if total else "-"),
+        }
+        for row in lane["rows"]
+    ]
+    if not rows:
+        return '<div class="lane"><h3>%s</h3><p class="chart-note">%s</p></div>' % (
+            esc(lane["name"]),
+            esc("Nothing in this window records it. %s" % lane["note"]),
+        )
+    return '<div class="lane"><h3>%s</h3><div class="chart-wrap">%s</div><p class="chart-note">%s</p>%s</div>' % (
+        esc(lane["name"]),
+        svg_ranked_bars(rows, label_width=320),
+        esc(lane["note"] + "."),
+        table_view(
+            ["name", "weighted", "turns"],
+            [[row["label"], exact(row["weighted"]), exact(row["turns"]) if row.get("turns") else "-"] for row in lane["rows"]],
+            "Numbers",
+        ),
+    )
+
+
+def _lanes_section(window, analysis, store):
+    if analysis is None or not analysis.get("evidence"):
+        return (
+            '<section class="card"><h2>Cost centres</h2><p class="sub">%s, so the window cannot be split '
+            "into centres.</p></section>" % _sentence_case(_store_reason(store, detail=True))
+        )
+    total = window["totals"]["weighted"]
+    return (
+        '<section class="card"><h2>Cost centres</h2>'
+        '<p class="sub">The same window, ranked six ways; each footer states the coverage of its '
+        "field.</p>%s%s</section>"
+        % (
+            _shortfall_notice(store),
+            "".join(_lane_block(lane, total) for lane in analysis["evidence"]["lanes"]),
+        )
     )
 
 
@@ -1387,9 +1771,7 @@ def _raw_section(parts):
     )
     return (
         '<section class="card raw"><h2>Raw breakdowns</h2>'
-        '<p class="sub">Everything the page used to open with, unchanged and collapsed. Open a panel only when '
-        "you want the underlying numbers; the reading path above does not need them. Aggregates here are "
-        "separate lenses on the same window and overlap by design.</p>%s</section>" % blocks
+        '<p class="sub">Separate lenses on the same window, overlapping by design.</p>%s</section>' % blocks
     )
 
 
@@ -1540,14 +1922,14 @@ def rebuild_stale(
                 file=sys.stderr,
             )
         narrative = stamp["narrative"] if stamp else None
+        recommendations = advice.recommend(window, window["findings"], config)
+        analysis, store = analysis_for(window, config, data_dir)
         if refresh_narrative:
-            fresh, error = narrative_for(windows, window, config)
+            fresh, error = narrative_for(windows, window, config, recommendations, analysis)
             if error:
                 print("narrative skipped for %s: %s" % (window["window"]["key"], error), file=sys.stderr)
             narrative = fresh or narrative
-        recommendations = advice.recommend(window, window["findings"], config)
-        analysis, store = analysis_for(window, config, data_dir)
-        write_report(windows, window, narrative, report_dir, recommendations, analysis, store)
+        write_report(windows, window, narrative, report_dir, recommendations, analysis, store, config)
         rebuilt.append(
             {
                 "key": window["window"]["key"],
@@ -1559,8 +1941,9 @@ def rebuild_stale(
     return rebuilt
 
 
-def render_html(windows, target, narrative=None, recommendations=None, analysis=None, store=None):
+def render_html(windows, target, narrative=None, recommendations=None, analysis=None, store=None, config=None):
     store = store or empty_store()
+    config = config or paths.shipped_config()
     previous = None
     for index, window in enumerate(windows):
         if window["window"]["key"] == target["window"]["key"] and index:
@@ -1577,12 +1960,15 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
         ("Top sessions", _sessions_section(target)),
         ("Whale turns", _whales_section(target)),
         ("Headline tiles", _headline_section(target, previous)),
+        ("Rule lenses", _findings_section(target)),
+        ("What the big cost centres did", _drilldown_section(analysis, store)),
     ]
+    anchors = {card["id"] for card in ((analysis or {}).get("evidence") or {}).get("cards") or []}
     body = "".join(
         [
             "<header><h1>Claude token guardrail &mdash; %s</h1>" % esc(target["window"]["key"]),
-            '<p class="sub">Generated %s from %s transcript files, %s records, %s malformed lines skipped. '
-            "Weighted tokens, not raw tokens: cache reads are cheap, output and Opus are not.</p></header>"
+            '<p class="sub">%s &middot; %s files, %s records, %s malformed. Weighted tokens, not raw.</p>'
+            "</header>"
             % (
                 esc(target["generated_at"][:19].replace("T", " ")),
                 esc(exact(parse["files_scanned"])),
@@ -1591,11 +1977,11 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
             ),
             _weights_notice(windows),
             _verdict_section(target, previous, recommendations),
+            _actions_section(recommendations, anchors, config),
             _narrative_section(narrative),
-            _root_cause_section(target, analysis, store),
-            _drilldown_section(analysis, store),
+            _findings_cards_section(target, analysis, store),
+            _lanes_section(target, analysis, store),
             _raw_section(raw_parts),
-            _findings_section(target),
             _recommendations_section(target, recommendations),
         ]
     )
@@ -1608,7 +1994,7 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
     )
 
 
-def build_narrative_prompt(target, previous, rows, recommendations=None):
+def build_narrative_prompt(target, previous, rows, recommendations=None, analysis=None):
     lines = [
         "You are writing two short paragraphs for a personal Claude Code token-usage report.",
         "Window %s (%s to %s), %s weighted tokens, %s of the ceiling."
@@ -1634,6 +2020,20 @@ def build_narrative_prompt(target, previous, rows, recommendations=None):
     lines.append("Recommendations already derived from the rules, ranked:")
     for finding in sorted(target["findings"], key=lambda f: -f["weighted_cost"])[:6]:
         lines.append("- %s: %s (%s weighted)" % (finding["rule"], finding["detail"], compact(finding["weighted_cost"])))
+    jobs = (((analysis or {}).get("evidence") or {}).get("lanes") or [{}])[0].get("rows") or []
+    if jobs:
+        lines.append("Jobs this window, named by the description the orchestrator dispatched them with:")
+        for job in jobs[:6]:
+            lines.append("- %s: %s weighted" % (job["label"], compact(job["weighted"])))
+    for session in ((target.get("context") or {}).get("sessions") or [])[:2]:
+        growth = ", ".join(
+            "%s %s from %d results" % (compact(entry["tokens"]), entry["tool"], entry["results"])
+            for entry in (session.get("growth_by_tool") or [])[:4]
+        )
+        lines.append(
+            "- context growth in session %s: %s total, %s, %d compaction(s)"
+            % (session["session"][:8], compact(session["growth_total"]), growth or "unattributed", session["compactions"])
+        )
     lines.append("Top sessions:")
     for session in sorted(target["by_session"], key=lambda s: -s["weighted"])[:3]:
         lines.append(
@@ -1661,10 +2061,11 @@ def build_narrative_prompt(target, previous, rows, recommendations=None):
             )
         )
     lines.append(
-        "Write plain prose, no headings, no markdown emphasis, at most 200 words: what drove this window, and "
+        "Write plain prose, no headings, no markdown emphasis, at most 120 words: what drove this window, and "
         "then ground the advice in the recommendations listed above, leading with the largest one. Never sum "
         "the overlapping findings, and never suggest using fewer subagents - heavy orchestration is the "
-        "intended workflow; right-size the workers and the batch size instead."
+        "intended workflow; right-size the workers and the batch size instead. Name the jobs by the "
+        "descriptions above rather than by session hashes."
     )
     return "\n".join(lines)
 
@@ -1688,12 +2089,12 @@ def fetch_narrative(prompt, timeout=180, model=DEFAULT_NARRATIVE_MODEL):
     return (text, None) if text else (None, "empty response")
 
 
-def write_report(windows, target, narrative, report_dir=None, recommendations=None, analysis=None, store=None):
+def write_report(windows, target, narrative, report_dir=None, recommendations=None, analysis=None, store=None, config=None):
     report_dir = report_dir or default_report_dir()
     os.makedirs(report_dir, exist_ok=True)
     path = os.path.join(report_dir, "%s.html" % target["window"]["key"])
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write(render_html(windows, target, narrative, recommendations, analysis, store))
+        handle.write(render_html(windows, target, narrative, recommendations, analysis, store, config))
     return path
 
 
@@ -1740,14 +2141,14 @@ def console_summary(windows, target, recommendations=None):
     return "\n".join(lines)
 
 
-def narrative_for(windows, target, config, recommendations=None):
+def narrative_for(windows, target, config, recommendations=None, analysis=None):
     if recommendations is None:
         recommendations = advice.recommend(target, target["findings"], config)
     index = [w["window"]["key"] for w in windows].index(target["window"]["key"])
     previous = windows[index - 1] if index else None
     rows = decompose_delta(previous, target) if previous else []
     return fetch_narrative(
-        build_narrative_prompt(target, previous, rows, recommendations),
+        build_narrative_prompt(target, previous, rows, recommendations, analysis),
         model=config.get("narrative_model"),
     )
 
@@ -1789,14 +2190,14 @@ def main(argv=None):
     config = load_config(args.config)
     recommendations = advice.recommend(target, target["findings"], config)
 
+    analysis, store = analysis_for(target, config, data_dir)
     narrative = None
     if not args.no_narrative:
-        narrative, error = narrative_for(windows, target, config, recommendations)
+        narrative, error = narrative_for(windows, target, config, recommendations, analysis)
         if error:
             print("narrative skipped: %s" % error, file=sys.stderr)
 
-    analysis, store = analysis_for(target, config, data_dir)
-    path = write_report(windows, target, narrative, report_dir, recommendations, analysis, store)
+    path = write_report(windows, target, narrative, report_dir, recommendations, analysis, store, config)
     rebuilt = rebuild_stale(
         windows,
         config,

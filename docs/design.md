@@ -410,14 +410,42 @@ share of turns that recorded any tool call at all.
 ### `report.py` — weekly HTML
 
 Reads every `data/week_*.json` plus the target window's `data/records/<key>.jsonl`, and renders one
-self-contained HTML page. The reading path is, in order: a **Verdict** block (window position
-against the ceiling, burn rate against the sustainable rate, week-over-week delta, and the three
-top-ranked actions), the narrative, **Findings** each with its root-cause line inline and its
-evidence behind a `<details>`, a **drill-down** that splits the largest agent types and skills into
-the jobs their runs actually did, one **Raw breakdowns** section holding every earlier section
-collapsed and unchanged (cross-week comparison, delta decomposition, burn detail, where-this-window
-went, top sessions, whale turns, headline tiles), then Rule lenses and Recommendations. A spike must
-attribute to `+610k: subagent storm in dynamic-pricing`, never to a taller unexplained bar.
+self-contained HTML page. The reading path is, in order:
+
+1. **Verdict** — four tiles (quota or ceiling used with the method named, weighted spent, list-price
+   USD, the share of subagent spend no agent type claims) over a seven-day burn line against the
+   quota with the reset instant marked.
+2. **Do these first** — at most three cards, each one claim, the threshold it was counted at, one
+   number, a risk and a confidence badge, and a link to its finding's chart. The overlap notice
+   appears here, once.
+3. **Why this week looked like this** — the narrative, capped at 120 words.
+4. **Findings** — one card per finding group, carrying exactly one chart or table as its evidence.
+   Everything else, the root-cause line included, sits behind a `<details>`.
+5. **Cost centres** — one ranked bar chart per lane: description-named jobs, MCP servers, plugins,
+   skills, repos, models. Each footer states the coverage of the field its lane groups by.
+6. **Raw breakdowns** — every earlier section, collapsed and unchanged.
+7. **Recommendations** — the existing grouping, plus a `headroom` group that renders only when a
+   recommendation of that kind exists.
+
+A spike must attribute to a named job, never to a taller unexplained bar.
+
+**One chart per rule.** `context_bloat` draws the session's context over time, coloured by the tool
+whose results grew it, with the threshold line and the compaction markers. `subagent_storm` draws a
+run timeline labelled with the orchestrator's descriptions, so overlap is visible. `model_mismatch`
+is a scatter of output tokens against tool calls with the counted-trivial region drawn as a box.
+`agent_type_skew` is a bar per job cluster with the no-run-id residual as its own bar. `whale_turns`
+decomposes the costliest turns by token class. `redundant_reads`, `loop_retry` and the round-trip
+detectors get tables.
+
+**Word budget.** Visible text outside `<details>` is capped at 1,500 words, measured by
+`report.visible_words`, which drops every `<details>` body but keeps its `<summary>`, and counts the
+text inside the SVG charts like any other. A test renders a real-shaped fixture window through
+`collect.aggregate_window` and fails above the cap.
+
+`evidence.py` holds the per-card chart payloads and the lane rankings, and `charts.py` the SVG
+geometry; `report.py` is left with page assembly. `evidence.build` is attached to the root-cause
+analysis under the `evidence` key, so a window with no readable records degrades the same way the
+rest of the page does.
 
 The record store is an *optional* input: a window whose `.jsonl` is missing or unreadable still
 renders, with the root-cause and drill-down sections stating plainly that they had nothing to read.
@@ -537,8 +565,8 @@ my-token-spend/
   bin/my-token-spend  bin/my-token-spend.ps1
   commands/my-token-spend.md
   skills/my-token-spend/SKILL.md
-  src/  cli.py collect.py rules.py context.py rootcause.py advice.py report.py tune.py
-        paths.py
+  src/  cli.py collect.py rules.py context.py cost.py rootcause.py advice.py evidence.py
+        report.py charts.py tune.py quota.py paths.py
         config.default.json
   docs/design.md  README.md
 ```

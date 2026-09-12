@@ -9,7 +9,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import charts
 import report
 
 
@@ -160,11 +159,11 @@ def test_exact_and_percent():
 
 
 def test_nice_ticks_cover_the_maximum():
-    ticks = charts.nice_ticks(812_850_236)
+    ticks = report.nice_ticks(812_850_236)
     assert ticks[0] == 0
     assert ticks[-1] >= 812_850_236
     assert ticks == sorted(ticks)
-    assert charts.nice_ticks(0) == [0.0, 1.0]
+    assert report.nice_ticks(0) == [0.0, 1.0]
 
 
 def test_repo_label_uses_the_leaf_directory():
@@ -318,7 +317,8 @@ def test_agent_rows_add_the_unattributed_residual():
 def test_render_html_has_no_external_references():
     windows = [make_window(start="2026-08-15", is_current=False), make_window()]
     html = report.render_html(windows, windows[-1])
-    assert not re.search(r'(href|src)\s*=', html)
+    assert not re.search(r'src\s*=', html)
+    assert all(href.startswith("#") for href in re.findall(r'href\s*=\s*"([^"]*)"', html))
     assert "url(" not in html
     assert "@import" not in html
     assert "<script>" in html and "</script>" in html
@@ -940,10 +940,14 @@ def write_records(data_dir, window, records):
 CONFIG = json.loads((Path(__file__).resolve().parents[1] / "src" / "config.default.json").read_text())
 
 
-def analysed(window, records):
+def analysed(window, records, calls=None):
+    import evidence
     import rootcause
 
-    return rootcause.analyse(window, records, CONFIG)
+    analysis = rootcause.analyse(window, records, CONFIG, calls)
+    if analysis is not None:
+        analysis["evidence"] = evidence.build(window, records, CONFIG, calls)
+    return analysis
 
 
 def storm_window(records=None, subject="s1", start="2026-08-22", is_current=True):
@@ -959,48 +963,62 @@ def storm_window(records=None, subject="s1", start="2026-08-22", is_current=True
     return window, records
 
 
-def test_the_page_reads_verdict_then_findings_then_drill_down_then_raw():
+def test_the_page_reads_verdict_then_actions_then_findings_then_centres_then_raw():
     window, records = storm_window()
     windows = [window]
     html = report.render_html(windows, window, recommendations=[recommendation()], analysis=analysed(window, records))
     order = [
-        html.index("<h2>Verdict</h2>"),
-        html.index("Findings, and what the work behind them was"),
-        html.index("What the big cost centres did"),
+        html.index('<section class="card verdict">'),
+        html.index("<h2>Do these first</h2>"),
+        html.index("<h2>Why this week looked like this</h2>"),
+        html.index("<h2>Findings</h2>"),
+        html.index("<h2>Cost centres</h2>"),
         html.index("<h2>Raw breakdowns</h2>"),
-        html.index("Rule lenses"),
         html.index("<h2>Recommendations</h2>"),
     ]
     assert order == sorted(order)
 
 
-def test_the_verdict_leads_with_position_burn_and_the_three_top_actions():
+def test_the_verdict_carries_four_tiles_and_the_burn_line():
     window, records = storm_window()
+    window["cost_usd"] = {"usd": 12.5, "sessions": 1, "priced_sessions": 1, "share": 1.0,
+                          "label": "list price, as /cost shows it; not what the subscription bills"}
     html = report.render_html([window], window, recommendations=[recommendation()], analysis=analysed(window, records))
     verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
-    assert "Window position" in verdict
-    assert "Burn rate" in verdict
-    assert "vs previous window" in verdict
-    assert "Do these first" in verdict
-    assert "Run trivial claude-opus-5 turns on claude-sonnet-5" in verdict
-    assert "Cost is not waste" in verdict
+    assert "Ceiling used" in verdict
+    assert "quota unknown this window, ceiling estimated from your own heavy weeks" in verdict
+    assert "Weighted spent" in verdict
+    assert "$12.50" in verdict
+    assert "not what the subscription bills" in verdict
+    assert "Unattributed subagent spend" in verdict
+    assert "quota 10.0K" in verdict
+    assert "reset 2026-08-29" in verdict
 
 
-def test_the_verdict_lists_at_most_three_actions():
+def test_the_actions_name_a_threshold_and_link_to_their_chart():
+    window, records = storm_window()
+    html = report.render_html([window], window, recommendations=[recommendation()], analysis=analysed(window, records))
+    actions = html.split("<h2>Do these first</h2>")[1].split("</section>")[0]
+    assert "Run trivial claude-opus-5 turns on claude-sonnet-5" in actions
+    assert "turns under 250 output tokens with at most 1 tool call" in actions
+    assert "Cost is not waste" in actions
+
+
+def test_the_actions_list_at_most_three():
     window, records = storm_window()
     many = [recommendation(kind="k%d" % index, saving=1000.0 * (10 - index)) for index in range(5)]
     for index, item in enumerate(many):
         item["title"] = "action number %d" % index
     html = report.render_html([window], window, recommendations=many, analysis=analysed(window, records))
-    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
-    assert verdict.count("action number") == 3
-    assert "action number 3" not in verdict
+    actions = html.split("<h2>Do these first</h2>")[1].split("</section>")[0]
+    assert actions.count("action number") == 3
+    assert "action number 3" not in actions
 
 
-def test_the_verdict_states_when_no_action_cleared_the_threshold():
+def test_the_actions_state_when_nothing_cleared_the_threshold():
     window, records = storm_window()
     html = report.render_html([window], window, recommendations=[], analysis=analysed(window, records))
-    assert "no ranked action list" in html
+    assert "No rule cleared the reporting threshold this window" in html
 
 
 RAW_PANELS = (
@@ -1050,10 +1068,10 @@ def test_the_raw_panels_are_the_only_home_of_the_old_sections():
 def test_a_finding_carries_its_root_cause_line_and_its_evidence():
     window, records = storm_window()
     html = report.render_html([window], window, analysis=analysed(window, records))
-    findings = html.split("Findings, and what the work behind them was")[1].split('<section class="card">')[0]
+    findings = html.split("<h2>Findings</h2>")[1].split("<h2>Cost centres</h2>")[0]
     assert "The work behind it: 4 subagent runs" in findings
     assert "median 6 turns per run" in findings
-    assert "<details><summary>Evidence</summary>" in findings
+    assert "<details><summary>Work behind it</summary>" in findings
     assert "job cluster:" in findings
     assert "tool calls are recorded on" in findings
 
@@ -1061,9 +1079,9 @@ def test_a_finding_carries_its_root_cause_line_and_its_evidence():
 def test_the_findings_section_refuses_to_claim_intent():
     window, records = storm_window()
     html = report.render_html([window], window, analysis=analysed(window, records))
-    assert "what the work was" in html
-    assert "never why anyone chose it" in html
-    assert "Intent is not in this data" in html
+    findings = html.split("<h2>Findings</h2>")[1].split("<h2>Cost centres</h2>")[0]
+    assert "never summed" in findings
+    assert "nothing here says why anyone chose the work" in findings
 
 
 def test_a_missing_record_store_is_stated_not_faked():
@@ -1078,7 +1096,7 @@ def test_a_missing_record_store_is_stated_not_faked():
 def test_the_drill_down_costs_each_job_of_a_vague_cost_centre():
     window, records = storm_window()
     html = report.render_html([window], window, analysis=analysed(window, records))
-    drill = html.split("What the big cost centres did")[1]
+    drill = html.split("<h2>What the big cost centres did</h2>")[1]
     assert "agent type general-purpose" in drill
     assert "rebase the pricing branch onto main and rerun the failing tests" in drill
     assert "job cluster" in drill
@@ -1245,7 +1263,7 @@ def test_a_failing_analysis_is_reported_and_never_blamed_on_the_store(tmp_path, 
     assert "Traceback (most recent call last)" in err
 
     html = report.render_html([window], window, analysis=analysis, store=store)
-    assert "the root-cause analysis of this window failed with %s" % type(error).__name__ in html
+    assert "root-cause analysis of this window failed with %s" % type(error).__name__ in html
     assert "a defect in the analysis and not a problem with your records" in html
     assert "not readable" not in html
     assert "could not be read" not in html
@@ -1264,7 +1282,7 @@ def test_a_failing_analysis_through_main_still_renders_and_diagnoses(tmp_path, m
     assert "KeyError" in err
     with open(os.path.join(report_dir, "week_2026_08_22.html"), encoding="utf-8") as handle:
         page = handle.read()
-    assert "the root-cause analysis of this window failed with KeyError" in page
+    assert "root-cause analysis of this window failed with KeyError" in page
     assert "not readable" not in page
 
 
@@ -1304,6 +1322,6 @@ def test_a_cluster_list_states_how_many_runs_a_description_was_recovered_for():
     }
     analysis = rootcause.analyse(window, records, CONFIG, calls)
     html = report.render_html([window], window, analysis=analysis)
-    drill = html.split("What the big cost centres did")[1]
+    drill = html.split("<h2>What the big cost centres did</h2>")[1]
     assert "Rebase the pricing branch" in drill
     assert "descriptions recovered for 50% of runs" in drill
