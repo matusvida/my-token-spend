@@ -463,3 +463,18 @@ def test_a_headroom_card_is_never_presented_as_a_saving(home):
     agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
     for item in of_kind(advise(headroom_finding([component("deep-reviewer")]), home), "upgrade_tier"):
         assert item["weighted_saving"] == 0.0
+
+
+def test_the_headroom_block_ships_with_the_defaults_the_rule_falls_back_to():
+    assert CONFIG["headroom"] == {
+        "max_pct": 60,
+        "min_thinking": 500,
+        "min_output": 800,
+        "min_serial_minutes": 20,
+    }
+    assert rules.headroom_settings({}) == CONFIG["headroom"]
+
+
+def test_the_opus_class_list_ships_empty_so_nothing_is_upgraded_unasked():
+    assert CONFIG["advice"]["opus_class_agents"] == []
+    assert advice._settings({})["opus_class_agents"] == []

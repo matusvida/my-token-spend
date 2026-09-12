@@ -11,6 +11,7 @@ import rules
 
 PROPOSAL = "proposal"
 SETTING_PROPOSAL = "setting_proposal"
+UPGRADE_PROPOSAL = "upgrade_proposal"
 ALREADY_RIGHT_SIZED = "already_right_sized"
 NO_FILE = "no_file"
 AMBIGUOUS = "ambiguous"
@@ -420,6 +421,7 @@ def _entry(centre, status, **extra):
         "setting_readable": None,
         "trivial_weighted": centre.get("typical_trivial_weighted"),
         "trivial_turns": centre.get("trivial_turns"),
+        "weighted_cost_increase": None,
     }
     entry.update(extra)
     return entry
@@ -493,7 +495,53 @@ def _builtin_entry(centre, window_data, config, settings_map, setting, buys):
     )
 
 
-def _agent_entry(centre, roots, window_data, config, settings_map, windows, setting):
+def _upgrade_entry(
+    centre, path, text, roots, declared, description, window_data, config, headroom
+):
+    pricing = window_data.get("weights", config)
+    families = rules.family_weights(pricing)
+    current = families.get(_model_family(declared))
+    target = families.get(advice.UPGRADE_FAMILY)
+    cost = (
+        centre["typical_weighted"] * (target / current - 1.0)
+        if current and target and target > current
+        else None
+    )
+    if cost is None or cost > headroom:
+        return _entry(
+            centre,
+            ALREADY_RIGHT_SIZED,
+            files=[str(path)],
+            buys=description,
+            note="the definition asks for `model: %s`. Moving it to %s would cost about %s weighted tokens per window, and the analysed windows left %s unused, so no upgrade is proposed."
+            % (
+                declared,
+                advice.UPGRADE_FAMILY,
+                _num(cost) if cost is not None else "an amount this data cannot price",
+                _num(headroom),
+            ),
+            performance_risk="none",
+            quality_risk="No change proposed, so no quality risk.",
+        )
+    return _entry(
+        centre,
+        UPGRADE_PROPOSAL,
+        files=[str(path)],
+        buys=description,
+        weighted_cost_increase=cost,
+        performance_risk="none",
+        confidence="low",
+        note="set `model: %s` in the frontmatter. This SPENDS quota rather than saving it: about %s weighted tokens more per window, against the %s the analysed windows left unused."
+        % (advice.UPGRADE_FAMILY, _num(cost), _num(headroom)),
+        quality_risk="whether a higher tier reaches better answers on: %s - is NOT measurable from this data. The case for it is that the work looks like judgement, not that it was measured."
+        % (description or "this agent's work"),
+        patch=agentfiles.unified_patch(
+            path, text, advice.UPGRADE_FAMILY, agentfiles.display_path(path, roots)
+        ),
+    )
+
+
+def _agent_entry(centre, roots, window_data, config, settings_map, windows, setting, headroom=0.0):
     name = centre["name"]
     matches = agentfiles.resolve_agent(name, roots)
     sessions = _storm_sessions(windows, name)
@@ -536,7 +584,27 @@ def _agent_entry(centre, roots, window_data, config, settings_map, windows, sett
     target = config["thresholds"]["model_mismatch"]["downgrade_model"]
     files = [str(path)]
 
+    advice_settings = advice._settings(config)
+    sonnet_class = set(advice_settings["sonnet_class_agents"])
+    opus_class = set(advice_settings["opus_class_agents"])
+    if name not in sonnet_class and name not in opus_class:
+        return _entry(
+            centre,
+            NOT_ASSESSABLE,
+            files=files,
+            buys=description or buys,
+            note="listed in neither advice.sonnet_class_agents nor advice.opus_class_agents in "
+            "config.json, so which tier its work needs has not been judged. Cost shown without a saving "
+            "on purpose.",
+            performance_risk="unknown",
+            quality_risk="Cannot be assessed from spend data alone.",
+        )
+
     if declared and _model_family(declared) in set(settings_map["cheap_model_families"]):
+        if name in opus_class and headroom > 0:
+            return _upgrade_entry(
+                centre, path, text, roots, declared, description or buys, window_data, config, headroom
+            )
         return _entry(
             centre,
             ALREADY_RIGHT_SIZED,
@@ -548,16 +616,14 @@ def _agent_entry(centre, roots, window_data, config, settings_map, windows, sett
             quality_risk="No change proposed, so no quality risk.",
         )
 
-    sonnet_class = set(advice._settings(config)["sonnet_class_agents"])
     if name not in sonnet_class:
         return _entry(
             centre,
             NOT_ASSESSABLE,
             files=files,
             buys=description or buys,
-            note="not listed in advice.sonnet_class_agents in config.json, so whether its work survives a "
-            "cheaper tier "
-            "has not been judged. Cost shown without a saving on purpose.",
+            note="listed in advice.opus_class_agents but not in advice.sonnet_class_agents, and its "
+            "definition does not ask for a cheaper tier, so there is nothing to propose either way.",
             performance_risk="unknown",
             quality_risk="Cannot be assessed from spend data alone.",
         )
@@ -652,6 +718,14 @@ def _skill_entry(centre, roots):
         description_chars=len(description),
         file_bytes=body,
     )
+
+
+def unused_quota(windows):
+    for data in reversed(windows):
+        bucket = (data.get("findings_by_rule") or {}).get("headroom")
+        if bucket and bucket.get("weighted_cost"):
+            return float(bucket["weighted_cost"])
+    return 0.0
 
 
 def _rule_totals(windows, rule):
@@ -759,11 +833,14 @@ def build(
     latest = windows[-1]
     ceiling = (latest.get("ceiling") or {}).get("estimate")
 
+    headroom = unused_quota(windows)
     centres = collect_centres(windows, records_by_window, settings_map, config)
     entries = []
     for centre in centres:
         if centre["component"] == "agent":
-            entries.append(_agent_entry(centre, roots, latest, config, settings_map, windows, setting))
+            entries.append(
+                _agent_entry(centre, roots, latest, config, settings_map, windows, setting, headroom)
+            )
         else:
             entries.append(_skill_entry(centre, roots))
 
@@ -774,7 +851,11 @@ def build(
         (e for e in entries if e["status"] == SETTING_PROPOSAL),
         key=lambda e: (-e["weighted_saving"], e["name"]),
     )
-    proposed = (PROPOSAL, SETTING_PROPOSAL)
+    upgrade_proposals = sorted(
+        (e for e in entries if e["status"] == UPGRADE_PROPOSAL),
+        key=lambda e: (-e["weighted_cost_increase"], e["name"]),
+    )
+    proposed = (PROPOSAL, SETTING_PROPOSAL, UPGRADE_PROPOSAL)
     reported = sorted(
         (
             e
@@ -844,6 +925,8 @@ def build(
         "single_window": len(windows) == 1,
         "proposals": proposals,
         "setting_proposals": setting_proposals,
+        "upgrade_proposals": upgrade_proposals,
+        "unused_quota": headroom,
         "subagent_model_setting": setting,
         "reconciliation": _reconciliation(
             windows, current, entries, proposals, setting_proposals, config, open_window=open_window, now=now
@@ -888,6 +971,7 @@ STATUS_LABEL = {
     ALREADY_RIGHT_SIZED: "already right-sized",
     NO_FILE: "no file to edit",
     AMBIGUOUS: "ambiguous",
+    UPGRADE_PROPOSAL: "UPGRADE PROPOSAL",
     NOT_ASSESSABLE: "no proposal",
     OBSERVATION: "below the saving floor",
     ONE_OFF: "one-off, not a pattern",
@@ -1138,7 +1222,13 @@ def _render_entry(entry, indent="  "):
     )
     if entry["buys"]:
         lines.append("%sWhat it buys: %s" % (indent, entry["buys"]))
-    if entry["status"] in (PROPOSAL, SETTING_PROPOSAL):
+    if entry["status"] == UPGRADE_PROPOSAL:
+        lines.append("%sUpgrade proposal: %s" % (indent, entry["note"]))
+        lines.append(
+            "%sEst. extra cost %s per window     Quality risk (%s): %s"
+            % (indent, _short(entry["weighted_cost_increase"]), entry["performance_risk"], entry["quality_risk"])
+        )
+    elif entry["status"] in (PROPOSAL, SETTING_PROPOSAL):
         lines.append("%sProposal: %s" % (indent, entry["note"]))
         lines.append(
             "%sEst. saving %s per window     Quality risk (%s): %s"
@@ -1164,6 +1254,28 @@ def _render_entry(entry, indent="  "):
         lines.append("")
         lines.extend(indent + line for line in entry["patch"].splitlines())
     return lines
+
+
+def _render_upgrade_proposals(result, lines):
+    lines.append("4b. UPGRADE PROPOSALS (%d)" % len(result["upgrade_proposals"]))
+    if not result["unused_quota"]:
+        lines.append(
+            "   none: no analysed window closed with quota measurably unused, so there is no headroom to "
+            "spend and nothing here proposes spending any."
+        )
+        return
+    lines.append(
+        "   the analysed windows left %s weighted tokens of quota unused. These name components whose "
+        "definition asks for a cheaper tier, that are listed in advice.opus_class_agents, and whose "
+        "upgrade fits inside that unused quota. Each one SPENDS; none of them is a saving."
+        % _num(result["unused_quota"])
+    )
+    if not result["upgrade_proposals"]:
+        lines.append("   none of the analysed components matched all three conditions.")
+        return
+    for entry in result["upgrade_proposals"]:
+        lines.append("")
+        lines.extend(_render_entry(entry))
 
 
 def _render_setting_proposals(result, lines):
@@ -1289,6 +1401,8 @@ def render(result):
         lines.append("")
         lines.extend(_render_entry(entry))
 
+    lines.append("")
+    _render_upgrade_proposals(result, lines)
     lines.append("")
     _render_setting_proposals(result, lines)
     lines.append("")
