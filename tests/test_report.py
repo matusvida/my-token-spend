@@ -1907,3 +1907,17 @@ def test_the_whale_legend_keeps_every_class_that_is_readable():
     html = report._whale_chart_html(chart)
     assert _swatches(html) == ["--series-1", "--series-2", "--series-3"]
     assert "Smaller classes omitted." not in html
+
+
+def test_a_lone_mismatched_turn_is_not_reported_in_the_plural():
+    import copy
+    import rules
+
+    config = copy.deepcopy(CONFIG)
+    records = [
+        record("2026-08-22T10:00:00+00:00", "u0", weighted=9e8, tools=[{"name": "Read", "hash": "h"}])
+    ]
+    records[0].update({"output": 100, "thinking": 20, "model": "claude-opus-5", "cache_read": 2_000_000})
+    detail = rules.model_mismatch(records, config)[0]["detail"]
+    assert detail.startswith("1 claude-opus-5 turn produced")
+    assert "it would have cost" in detail

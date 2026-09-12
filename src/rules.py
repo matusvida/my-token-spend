@@ -219,16 +219,16 @@ def model_mismatch(records, config):
         _finding(
             "model_mismatch",
             model,
-            "%d %s turns produced at most %d output tokens with %s, at most %d "
-            "thinking tokens and no %s dispatch among them; they would have cost %s weighted tokens less "
+            "%s produced at most %d output tokens with %s, at most %d "
+            "thinking tokens and no %s dispatch among them; %s would have cost %s weighted tokens less "
             "on %s"
             % (
-                bucket["turns"],
-                model,
+                text.plural(bucket["turns"], "%s turn" % model),
                 settings["max_output_tokens"],
                 text.bounded(1, settings["max_tool_calls"], "tool call"),
                 settings.get("max_thinking", MAX_THINKING_DEFAULT),
                 DISPATCH_TOOL,
+                "it" if bucket["turns"] == 1 else "they",
                 f"{bucket['cost']:,.0f}",
                 downgrade,
             ),
