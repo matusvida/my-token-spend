@@ -517,6 +517,18 @@ exactly one tool call, so plotting it would imply a spread that does not exist.
 decomposes the costliest turns by token class. `redundant_reads`, `loop_retry` and the round-trip
 detectors get tables.
 
+**A legend names what is drawn, and only what is readable.** Every colour a chart paints carries a
+legend entry: the context-bloat chart colours the five largest tools and folds the rest, including
+turns led by no single tool, into one grey *other or unattributed* entry. Nothing is listed that has
+no mark, and a whale-turn class holding under `report.WHALE_LEGEND_SHARE` (0.5%) of the drawn total
+is dropped from the legend because it renders sub-pixel; the footer then says smaller classes were
+omitted. The marks themselves are never removed.
+
+**No two rows carry the same label.** `charts.distinct_labels` elides the prefix and suffix shared by
+every label, and where that still leaves duplicates it re-elides within the colliding group alone and
+falls back to appending each row's start clock. Run timelines, the deep-dive cluster tables and the
+collapsed recommendations overview all go through it.
+
 **Word budget.** Visible text outside `<details>` is capped at 1,500 words, measured by
 `report.visible_words`, which drops every `<details>` body but keeps its `<summary>`, and counts the
 text inside the SVG charts like any other. A test renders a real-shaped fixture window through
