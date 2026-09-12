@@ -57,9 +57,12 @@ def weighted_cost(record, config):
     return _model_weight(record, config) * _raw_weighted(record, config)
 
 
-def _tool_share(record):
+def _tool_shares(record):
     tools = record["tools"]
-    return record["weighted"] / len(tools) if tools else 0.0
+    if not tools:
+        return []
+    share = record["weighted"] / len(tools)
+    return [(tool, share) for tool in tools]
 
 
 def _finding(rule, subject, detail, weighted_cost, evidence):
@@ -212,8 +215,7 @@ def redundant_reads(records, config):
     for session_id, session in _by_session(records).items():
         groups = defaultdict(list)
         for record in session:
-            share = _tool_share(record)
-            for tool in record["tools"]:
+            for tool, share in _tool_shares(record):
                 if tool["name"] in watched:
                     groups[(tool["name"], tool["hash"])].append((record, share))
         for (name, digest), occurrences in groups.items():
@@ -243,8 +245,7 @@ def loop_retry(records, config):
     for session_id, session in _by_session(records).items():
         sequence = []
         for record in session:
-            share = _tool_share(record)
-            for tool in record["tools"]:
+            for tool, share in _tool_shares(record):
                 sequence.append((tool["name"], tool["hash"], share))
         start = 0
         while start < len(sequence):
