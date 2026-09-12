@@ -1932,3 +1932,12 @@ def test_identical_labels_are_not_eaten_by_their_own_shared_affixes():
     assert charts.distinct_labels(labels, 40, stamps) == [
         charts.clip(labels[0], 40) + " 1%d:09" % index for index in range(3)
     ]
+
+
+def test_the_burn_ceiling_label_sits_clear_of_the_endpoint_value():
+    import charts
+
+    svg = charts.svg_burn(["09-05"], [1_739_908_484.0], 1_283_915_540.0, "reset", "estimated ceiling")
+    reference = re.search(r'<text class="reference-label" x="([0-9.]+)"[^>]*text-anchor="(\w+)">estimated', svg)
+    assert reference.group(2) == "start"
+    assert float(reference.group(1)) < charts.PLOT_WIDTH / 2

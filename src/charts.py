@@ -800,8 +800,8 @@ def svg_burn(labels, cumulative, ceiling, reset_label, ceiling_label="ceiling", 
             % (left, y, PLOT_WIDTH - MARGIN["right"], y)
         )
         parts.append(
-            '<text class="reference-label" x="%.2f" y="%.2f" text-anchor="end">%s %s</text>'
-            % (PLOT_WIDTH - MARGIN["right"] - 12, y - 8, esc(ceiling_label), esc(compact(ceiling)))
+            '<text class="reference-label" x="%.2f" y="%.2f" text-anchor="start">%s %s</text>'
+            % (left + 6, y - 8, esc(ceiling_label), esc(compact(ceiling)))
         )
     coordinates = " ".join("%.2f,%.2f" % (x_at(index), y_at(value)) for index, value in enumerate(cumulative))
     parts.append('<polyline class="line" points="%s" stroke="var(--series-1)"/>' % coordinates)
