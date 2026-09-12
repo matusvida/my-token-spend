@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import paths
+import text
 
 SUBCOMMANDS = ("collect", "report", "status", "quota", "tune", "install-schedule")
 
@@ -206,6 +207,8 @@ def cmd_collect(args):
         )
         print("rescan agent calls  : %d added" % rescan["agent_calls_added"])
         print("rescan session costs: %d added" % rescan["session_costs_added"])
+    if summary.get("reanalysed"):
+        print("re-analysed %s after a rule change" % text.plural(len(summary["reanalysed"]), "window"))
     print("ceiling: %s (%s)" % (collect._num(summary["ceiling"]["estimate"]), summary["ceiling"]["method"]))
     for aggregate in summary["windows"]:
         print(

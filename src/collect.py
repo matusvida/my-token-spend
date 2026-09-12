@@ -865,6 +865,19 @@ def describe_losses(losses):
     return "\n".join(lines)
 
 
+def stale_analysis(data_dir):
+    stale = []
+    for path in sorted(Path(data_dir).glob("week_*.json")):
+        stored = _load_json(path, {}).get("analysis_version")
+        if not isinstance(stored, int) or stored < rules.ANALYSIS_VERSION:
+            stale.append(path.stem)
+    return stale
+
+
+def _window_start_of(key):
+    return key.replace("week_", "").replace("_", "-")
+
+
 def _prune_window(store_dir, data_dir, reports_dir, key):
     for path in (
         store_dir / (key + ".jsonl"),
@@ -876,7 +889,10 @@ def _prune_window(store_dir, data_dir, reports_dir, key):
             path.unlink()
 
 
-def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None, costs=None):
+def _finalize(
+    stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None, costs=None,
+    extra_windows=(),
+):
     samples = samples or []
     instants = quota.reset_instants(samples)
     windows = {
@@ -898,9 +914,13 @@ def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, win
         start: weighted_by_start[ordered[index - 1]] for index, start in enumerate(ordered) if index
     }
     written = []
+    extra = []
     owned = cost.sessions_by_window(windows)
     for start, records in windows.items():
-        if (window and start != window) or not records:
+        if not records:
+            continue
+        requested = not window or start == window
+        if not requested and start not in extra_windows:
             continue
         aggregate = aggregate_window(
             date.fromisoformat(start),
@@ -917,12 +937,12 @@ def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, win
         key = aggregate["window"]["key"]
         _write_json(data_dir / (key + ".json"), aggregate)
         (reports_dir / (key + ".md")).write_text(render_markdown(aggregate), encoding="utf-8")
-        written.append(aggregate)
+        (written if requested else extra).append(aggregate)
     notices = {
         "unknown_models": unknown_model_report(windows, config),
         "pricing_drift": pricing_drift(windows, config),
     }
-    return windows, ceiling, written, notices
+    return windows, ceiling, written, notices, extra
 
 
 def _prepare_dirs(out_dir):
@@ -958,7 +978,7 @@ def recut(config, out_dir, state_path, window=None):
         "files_scanned": len(tracked),
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
-    windows, ceiling, written, notices = _finalize(
+    windows, ceiling, written, notices, _ = _finalize(
         stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples, cost.load(data_dir)
     )
     merge_agent_calls(store_dir, [], config, instants=instants)
@@ -1007,7 +1027,7 @@ def reprice(config, out_dir, state_path):
         "files_scanned": len(tracked),
         "malformed_lines": sum(entry.get("malformed", 0) for entry in tracked.values()),
     }
-    windows, ceiling, written, notices = _finalize(
+    windows, ceiling, written, notices, _ = _finalize(
         stores, config, store_dir, data_dir, reports_dir, parse_stats, None, samples, cost.load(data_dir)
     )
     return {
@@ -1208,9 +1228,12 @@ def run(
     costs_before = len(cost.load(data_dir))
     calls_before = len(load_agent_calls(store_dir))
     costs = cost.merge(data_dir, fresh_costs, discard_stored=rebuild_from_transcripts_only)
-    windows, ceiling, written, notices = _finalize(
-        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples, costs
+    stale = stale_analysis(data_dir)
+    windows, ceiling, written, notices, extra = _finalize(
+        stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples, costs,
+        extra_windows={_window_start_of(key) for key in stale},
     )
+    reanalysed = sorted(set(stale) & {a["window"]["key"] for a in written + extra})
     calls = merge_agent_calls(
         store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only, instants=instants
     )
@@ -1233,6 +1256,7 @@ def run(
         "ceiling": ceiling,
         "losses": losses,
         "agent_calls": len(calls),
+        "reanalysed": reanalysed,
         "rescan_recommended": recommended,
         "rescan": {
             "records_updated": merged_counts["updated"],

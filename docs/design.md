@@ -1089,6 +1089,47 @@ A cell with no matching finding gets no cause and is labelled plainly as
 not a gap: spend can grow simply because more work was done.
 
 
+## Reasons-engine versioning
+
+A rule finding's detail sentence and its evidence are rendered by `rules.evaluate` at
+collect time and frozen into `data/week_*.json`. `report.py` only re-renders what it
+finds there. So changing a rule's wording, its threshold, or the shape of the aggregate
+leaves every already-written window showing the sentence the old code produced, with no
+sign that it is out of date.
+
+`rules.ANALYSIS_VERSION` is the revision of that engine, and `aggregate_window` copies it
+into every window as `analysis_version`.
+
+### Bumping the version
+
+**Bump `rules.ANALYSIS_VERSION` in the same commit as any change to the text a rule
+emits, to a threshold that decides whether a rule fires or how it is worded, or to the
+shape of the window aggregate.** It does not cover a change that only affects rendering,
+because `report.py` re-renders from the stored aggregate on every run.
+
+A missed bump leaves closed windows explaining themselves in the old language. The cost
+of an unnecessary bump is one re-aggregation per window, which reads nothing but the
+record store.
+
+### The re-analysis pass
+
+Every plain `collect`, after the incremental ingest, re-aggregates any window whose
+stored `analysis_version` is missing or below `rules.ANALYSIS_VERSION` and prints
+`re-analysed N window(s) after a rule change`. A window stamped *above* the code's
+version is left alone: the store was written by a newer build and downgrading it would
+lose information.
+
+The pass reads only the durable record store. It never writes a record and never changes
+a weighted total — re-pricing is `--reprice`'s job and its semantics are untouched. A
+window the run was already going to write (the usual case, since `collect` without
+`--window` re-aggregates the whole store) is simply counted; `--window` narrows the
+normal write but not this pass, so a stale window outside the requested one is still
+brought current.
+
+`report` refuses to render while any window is stale rather than printing sentences from
+a rule revision that no longer exists, and names `collect` as the fix.
+
+
 ## Report format versioning
 
 `report.py` renders one HTML page per window, but a run only *asks* for one window.
