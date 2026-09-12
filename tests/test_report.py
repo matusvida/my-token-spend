@@ -1718,3 +1718,22 @@ def test_the_scatter_region_edges_sit_exactly_on_the_thresholds():
     assert abs(float(region.group(2)) - float(dot.group(2))) < 0.01
     assert abs(float(region.group(2)) + float(region.group(4)) - (320 - charts.MARGIN["bottom"])) < 0.01
     assert float(region.group(1)) == charts.MARGIN["left"]
+
+
+def test_the_burn_endpoint_label_stays_on_the_canvas_when_the_series_fills_the_axis():
+    import charts
+
+    svg = charts.svg_burn(["09-05"], [1_739_908_484.0], 1_283_915_540.0, "reset")
+    dot = float(re.search(r'class="end-dot" cx="[0-9.]+" cy="(-?[0-9.]+)"', svg).group(1))
+    label = float(re.search(r'<text class="value-label" x="[0-9.]+" y="(-?[0-9.]+)"', svg).group(1))
+    assert label - charts.VALUE_LABEL_ASCENT >= 0.0
+    assert label > dot
+
+
+def test_the_burn_endpoint_label_sits_above_the_dot_when_there_is_room():
+    import charts
+
+    svg = charts.svg_burn(["09-05"], [400_000_000.0], 1_283_915_540.0, "reset")
+    dot = float(re.search(r'class="end-dot" cx="[0-9.]+" cy="(-?[0-9.]+)"', svg).group(1))
+    label = float(re.search(r'<text class="value-label" x="[0-9.]+" y="(-?[0-9.]+)"', svg).group(1))
+    assert label < dot

@@ -131,6 +131,13 @@ GAP = 2
 INSIDE_LABEL_MIN = 56.0
 
 
+VALUE_LABEL_ASCENT = 12.0
+
+VALUE_LABEL_LIFT = 14.0
+
+VALUE_LABEL_DROP = 20.0
+
+
 def _plot_box(height=PLOT_HEIGHT):
     return (
         MARGIN["left"],
@@ -759,13 +766,17 @@ def svg_burn(labels, cumulative, ceiling, reset_label, ceiling_label="ceiling", 
     coordinates = " ".join("%.2f,%.2f" % (x_at(index), y_at(value)) for index, value in enumerate(cumulative))
     parts.append('<polyline class="line" points="%s" stroke="var(--series-1)"/>' % coordinates)
     if cumulative:
+        end_y = y_at(cumulative[-1])
+        label_y = end_y - VALUE_LABEL_LIFT
+        if label_y < VALUE_LABEL_ASCENT:
+            label_y = end_y + VALUE_LABEL_DROP
         parts.append(
             '<circle class="end-dot" cx="%.2f" cy="%.2f" r="5" fill="var(--series-1)"/>'
-            % (x_at(len(cumulative) - 1), y_at(cumulative[-1]))
+            % (x_at(len(cumulative) - 1), end_y)
         )
         parts.append(
             '<text class="value-label" x="%.2f" y="%.2f" text-anchor="end">%s</text>'
-            % (x_at(len(cumulative) - 1), y_at(cumulative[-1]) - 14, esc(compact(cumulative[-1])))
+            % (x_at(len(cumulative) - 1), label_y, esc(compact(cumulative[-1])))
         )
     edge = PLOT_WIDTH - MARGIN["right"]
     parts.append('<line class="marker" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f"/>' % (edge, top, edge, top + plot_height))
