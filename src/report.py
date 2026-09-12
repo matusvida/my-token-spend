@@ -1718,7 +1718,7 @@ def _lane_block(lane, total):
             ("label derived from tools", charts.OTHER, any(row.get("derived") for row in lane["rows"])),
         ]
     )
-    short = charts.shorten_labels([row["label"] for row in lane["rows"]], 38)
+    short = charts.shorten_labels([row["label"] for row in lane["rows"]], 40)
     rows = [
         {
             "label": label,
