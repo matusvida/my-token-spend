@@ -1539,7 +1539,7 @@ def _whale_chart_html(chart):
     categories = [
         {
             "label": row["label"],
-            "sublabel": None,
+            "sublabel": row.get("sublabel"),
             "parts": [row["parts"][index] for index in drawn],
             "tips": [
                 "%s at %s\n%s: %s weighted" % (row["model"], row["label"], name, exact(row["parts"][index]))
@@ -1553,8 +1553,17 @@ def _whale_chart_html(chart):
         svg_stacked_columns(categories, series),
         esc("One turn per bar, split by token class."),
         table_view(
-            ["when", "model", "agent", "weighted"],
-            [[row["label"], row["model"], row["agent"], exact(row["weighted"])] for row in chart["rows"]],
+            ["when", "turn", "model", "agent", "weighted"],
+            [
+                [
+                    row.get("second_label") or row["label"],
+                    exact(row["turn"]) if row.get("turn") else "",
+                    row["model"],
+                    row["agent"],
+                    exact(row["weighted"]),
+                ]
+                for row in chart["rows"]
+            ],
             "Numbers",
         ),
     )

@@ -1534,3 +1534,32 @@ def test_a_long_bars_value_label_is_drawn_inside_the_bar():
     assert labels[1][0] == ""
     track = charts.PLOT_WIDTH - 280 - 140
     assert float(labels[0][1]) < 280 + track
+
+
+def test_whale_labels_carry_seconds_and_a_turn_number_when_the_minute_repeats():
+    import evidence
+
+    records = [
+        record("2026-09-05T05:40:%02d+00:00" % (9 + index), "w%d" % index, weighted=100.0)
+        for index in range(3)
+    ]
+    findings = [finding("whale_turns", "s1", 100.0, uuid="w%d" % index) for index in range(3)]
+    chart = evidence._whale_chart(records, findings, CONFIG)
+    assert [row["label"] for row in chart["rows"]] == ["05:40:09", "05:40:10", "05:40:11"]
+    assert [row["sublabel"] for row in chart["rows"]] == ["#1", "#2", "#3"]
+    html = report._whale_chart_html(chart)
+    assert "05:40:09" in html and "#1" in html
+
+
+def test_whale_labels_stay_at_minute_resolution_when_nothing_collides():
+    import evidence
+
+    records = [
+        record("2026-09-05T0%d:40:00+00:00" % (5 + index), "w%d" % index, weighted=100.0)
+        for index in range(2)
+    ]
+    findings = [finding("whale_turns", "s1", 100.0, uuid="w%d" % index) for index in range(2)]
+    chart = evidence._whale_chart(records, findings, CONFIG)
+    assert [row["label"] for row in chart["rows"]] == ["05:40", "06:40"]
+    assert [row.get("sublabel") for row in chart["rows"]] == [None, None]
+    assert "05:40:00" in report._whale_chart_html(chart)

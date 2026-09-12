@@ -190,17 +190,28 @@ def _skew_chart(records, finding, config, agent_calls):
 WHALE_SERIES = ("context re-read from cache", "context written to cache", "output", "fresh input")
 
 
+def _turn_numbers(records):
+    ordered = {}
+    for record in sorted(records, key=lambda item: (item.get("ts") or "", item.get("uuid") or "")):
+        ordered.setdefault(record["sessionId"], []).append(record.get("uuid"))
+    return {uuid: index + 1 for uuids in ordered.values() for index, uuid in enumerate(uuids)}
+
+
 def _whale_chart(records, findings, config):
     by_uuid = {record["uuid"]: record for record in records if record.get("uuid")}
+    numbers = _turn_numbers(records)
     rows = []
     for finding in findings:
         record = by_uuid.get(finding["evidence"].get("uuid"))
         if record is None:
             continue
         parts = dict(rootcause.weight_components(record, config))
+        stamp = record["ts"] or ""
         rows.append(
             {
-                "label": (record["ts"] or "")[11:16],
+                "label": stamp[11:16],
+                "second_label": stamp[11:19],
+                "turn": numbers.get(record["uuid"]),
                 "model": record["model"],
                 "agent": record.get("attributionAgent") or "main agent",
                 "weighted": finding["weighted_cost"],
@@ -209,6 +220,10 @@ def _whale_chart(records, findings, config):
         )
     if not rows:
         return None
+    if len({row["label"] for row in rows}) < len(rows):
+        for row in rows:
+            row["label"] = row["second_label"]
+            row["sublabel"] = "#%d" % row["turn"] if row["turn"] else None
     return {"kind": "whale_bars", "rows": rows, "series": list(WHALE_SERIES)}
 
 
