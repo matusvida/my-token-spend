@@ -16,6 +16,8 @@ import rules
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+SCHEMA_VERSION = 2
+
 STANDARD_OFFSET = timedelta(seconds=-time.timezone)
 DAYLIGHT_OFFSET = timedelta(seconds=-time.altzone) if time.daylight else STANDARD_OFFSET
 
@@ -606,7 +608,7 @@ def aggregate_window(
         bucket["weighted_cost"] += finding["weighted_cost"]
 
     return {
-        "schema_version": 2,
+        "schema_version": SCHEMA_VERSION,
         "generated_at": now.isoformat(),
         "window": {
             "key": window_key(start_date),
@@ -769,6 +771,33 @@ def _load_store(path):
 
 def _record_key(record):
     return record["uuid"] or "%s|%s" % (record["sessionId"], record["ts"])
+
+
+PRICED_FIELDS = ("weighted", "model_known")
+
+
+def _merge_tools(stored, fresh):
+    prior = {tool.get("tool_use_id"): tool for tool in stored or [] if tool.get("tool_use_id")}
+    merged = []
+    for tool in fresh or []:
+        was = prior.get(tool.get("tool_use_id")) or {}
+        merged.append({key: (value if value is not None else was.get(key)) for key, value in tool.items()})
+    return merged
+
+
+def _upsert(bucket, key, record, reprice=False):
+    stored = bucket.get(key)
+    if stored is None:
+        bucket[key] = record
+        return "added"
+    merged = dict(stored)
+    merged.update(record)
+    if not reprice:
+        merged.update({field: stored[field] for field in PRICED_FIELDS if field in stored})
+    if stored.get("tools") and record.get("tools"):
+        merged["tools"] = _merge_tools(stored["tools"], record["tools"])
+    bucket[key] = merged
+    return "updated" if merged != stored else "unchanged"
 
 
 def _write_store(path, records):
@@ -1104,12 +1133,29 @@ def _poll_quota(quota_poll, data_dir, windows, config, instants, state, now=None
     return result
 
 
-def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_from_transcripts_only=False, quota_poll=None):
+def run(
+    config,
+    root,
+    out_dir,
+    state_path,
+    backfill=False,
+    window=None,
+    rebuild_from_transcripts_only=False,
+    quota_poll=None,
+    rescan=False,
+    reprice=False,
+):
     root, out_dir, state_path = Path(root), Path(out_dir), Path(state_path)
     data_dir, reports_dir, store_dir = _prepare_dirs(out_dir)
     backfill = backfill or rebuild_from_transcripts_only
 
-    state = {"files": {}} if backfill else _load_json(state_path, {"files": {}})
+    state = _load_json(state_path, {"files": {}})
+    prior_schema = state.get("schema_version")
+    was_collected = bool(state.get("files"))
+    if backfill:
+        state = {"files": {}}
+    elif rescan:
+        state["files"] = {}
     samples = quota.load_samples(data_dir)
     instants = quota.reset_instants(samples)
 
@@ -1133,9 +1179,14 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
 
     known = _load_stores(store_dir)
     stores = {} if rebuild_from_transcripts_only else {start: dict(b) for start, b in known.items()}
+    merged_counts = {"added": 0, "updated": 0, "unchanged": 0}
     for record in fresh:
         start = window_start(parse_ts(record["ts"]), config, instants).isoformat()
-        stores.setdefault(start, {})[_record_key(record)] = record
+        bucket = stores.setdefault(start, {})
+        if rescan:
+            merged_counts[_upsert(bucket, _record_key(record), record, reprice)] += 1
+        else:
+            bucket[_record_key(record)] = record
     _fill_tool_results(stores, pending_results)
 
     if not any(stores.values()):
@@ -1153,6 +1204,8 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         )
 
     parse_stats = {"files_scanned": len(files), "malformed_lines": malformed_total}
+    costs_before = len(cost.load(data_dir))
+    calls_before = len(load_agent_calls(store_dir))
     costs = cost.merge(data_dir, fresh_costs, discard_stored=rebuild_from_transcripts_only)
     windows, ceiling, written, notices = _finalize(
         stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples, costs
@@ -1160,6 +1213,11 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
     calls = merge_agent_calls(
         store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only, instants=instants
     )
+
+    recommended = None
+    if not rescan and was_collected and prior_schema != SCHEMA_VERSION:
+        recommended = SCHEMA_VERSION
+    state["schema_version"] = SCHEMA_VERSION
 
     quota_result = _poll_quota(quota_poll, data_dir, windows, config, instants, state)
     _write_json(state_path, state)
@@ -1174,6 +1232,16 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         "ceiling": ceiling,
         "losses": losses,
         "agent_calls": len(calls),
+        "rescan_recommended": recommended,
+        "rescan": {
+            "records_updated": merged_counts["updated"],
+            "records_added": merged_counts["added"],
+            "records_unchanged": merged_counts["unchanged"],
+            "agent_calls_added": len(calls) - calls_before,
+            "session_costs_added": len(costs) - costs_before,
+        }
+        if rescan
+        else None,
         **notices,
     }
 

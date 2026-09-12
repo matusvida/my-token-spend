@@ -90,11 +90,17 @@ def cmd_collect(args):
         return 0
     if args.recut_windows and (args.backfill or args.rebuild_from_transcripts_only):
         raise CliError("--recut-windows re-buckets the stored records and cannot be combined with a transcript re-read")
-    if args.reprice and (args.backfill or args.rebuild_from_transcripts_only or args.recut_windows or args.window):
-        raise CliError("--reprice re-prices every stored record and cannot be combined with any other collect flag")
+    if args.rescan and (args.backfill or args.rebuild_from_transcripts_only or args.recut_windows):
+        raise CliError("--rescan already re-reads every transcript and cannot be combined with another re-read")
+    if args.reprice and not args.rescan and (
+        args.backfill or args.rebuild_from_transcripts_only or args.recut_windows or args.window
+    ):
+        raise CliError(
+            "--reprice re-prices every stored record and cannot be combined with any collect flag but --rescan"
+        )
 
     try:
-        if args.reprice:
+        if args.reprice and not args.rescan:
             summary = collect.reprice(
                 config=config,
                 out_dir=home,
@@ -120,6 +126,8 @@ def cmd_collect(args):
                 window=args.window,
                 rebuild_from_transcripts_only=args.rebuild_from_transcripts_only,
                 quota_poll=quota.poll,
+                rescan=args.rescan,
+                reprice=args.reprice,
             )
     except collect.CollectionError as error:
         raise CliError(str(error))
@@ -173,6 +181,14 @@ def cmd_collect(args):
             % (drift["records"], ", ".join(drift["windows"])),
             file=sys.stderr,
         )
+    if summary.get("rescan_recommended"):
+        print(
+            "NEW FIELDS AVAILABLE: this store predates schema version %d, so the records collected before "
+            "the upgrade carry none of its fields; fold them in once with: collect --rescan"
+            % summary["rescan_recommended"],
+            file=sys.stderr,
+        )
+
     skipped = (summary.get("quota") or {}).get("skipped")
     if skipped:
         print("quota sample skipped: %s" % skipped, file=sys.stderr)
@@ -182,6 +198,14 @@ def cmd_collect(args):
         "scanned %d files, %d new records, %d records total, %d malformed lines"
         % (summary["files_scanned"], summary["new_records"], summary["total_records"], summary["malformed_lines"])
     )
+    rescan = summary.get("rescan")
+    if rescan:
+        print(
+            "rescan records      : %d gained fields, %d added, %d already complete"
+            % (rescan["records_updated"], rescan["records_added"], rescan["records_unchanged"])
+        )
+        print("rescan agent calls  : %d added" % rescan["agent_calls_added"])
+        print("rescan session costs: %d added" % rescan["session_costs_added"])
     print("ceiling: %s (%s)" % (collect._num(summary["ceiling"]["estimate"]), summary["ceiling"]["method"]))
     for aggregate in summary["windows"]:
         print(
@@ -572,6 +596,12 @@ def build_parser():
         "--calibrate-weights",
         action="store_true",
         help="print the token-class weights the stored list-price totals imply, next to the configured ones, and exit",
+    )
+    collect_parser.add_argument(
+        "--rescan",
+        action="store_true",
+        help="re-read every transcript from its first byte and fold the fields it carries into the stored "
+        "records, adding nothing to the weighted totals unless --reprice is given too",
     )
     collect_parser.add_argument("--window", metavar="YYYY-MM-DD", help="write only the window starting on this date")
     collect_parser.set_defaults(func=cmd_collect)
