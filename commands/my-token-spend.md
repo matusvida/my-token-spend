@@ -23,15 +23,18 @@ Subcommands:
 - `collect [--backfill] [--recut-windows] [--reprice] [--rebuild-from-transcripts-only] [--window YYYY-MM-DD]`
 - `report [--window YYYY-MM-DD] [--no-narrative] [--all] [--refresh-narrative]`
 - `status [--set-reset-weekday DAY]`
+- `quota`
 - `tune [--windows N] [--window YYYY-MM-DD] [--min-saving N] [--min-cost N] [--json]`
 - `install-schedule [--register] [--platform windows|launchd|cron] [--log-retention N]`
 
-If any command prints `RESET DAY NOT CONFIRMED`, ask the user with AskUserQuestion which weekday
-their Claude usage limit resets on, then run
-`sh "${CLAUDE_PLUGIN_ROOT}/bin/my-token-spend" status --set-reset-weekday <Day>` followed by
-`collect --recut-windows` if it reports the weekday changed. Do not guess the weekday, and never
-run `collect --rebuild-from-transcripts-only` - it discards history whose transcripts Claude Code
-has already pruned.
+Windows are cut at the reset instant the usage endpoint reports, sampled once per collect. If a run
+prints `WINDOW BOUNDARY CHANGED`, run `collect --recut-windows` to re-slice the stored records into
+the real windows. `quota sample skipped` means the token or the network was unavailable and the cut
+fell back to `reset_weekday`; `status --set-reset-weekday DAY` sets that fallback. Never run
+`collect --rebuild-from-transcripts-only` - it discards history whose transcripts Claude Code has
+already pruned.
+
+`quota` prints the latest usage sample, the known reset instants and the ceiling derived from them.
 
 If a command prints `UNKNOWN MODEL`, a model id in the transcripts matches nothing in
 `model_weights` and was priced at the default weight; tell the user the name and the weight rather
@@ -39,7 +42,7 @@ than leaving it in the window JSON. If it prints `PRICING DRIFT`, the stored rec
 with weights that no longer match the config: `collect --reprice` re-prices them from the stored
 token counts without reading a transcript, and `report --all` re-renders the pages for free.
 
-`tune` paces the last four closed windows against the estimated ceiling, ranks agents and skills by
+`tune` paces the last four closed windows against the ceiling, ranks agents and skills by
 their typical cost per window, measures failed and repeated tool round trips, and maps all of it
 onto the definition files on disk with a patch per proposal. Built-in agent types have no file, so
 their spend is proposed against `env.CLAUDE_CODE_SUBAGENT_MODEL` in `~/.claude/settings.json` and

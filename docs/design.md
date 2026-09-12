@@ -77,8 +77,9 @@ contradicts any of them is a bug, whatever else it improves.
 12. **No recommendation ever tells the user to use fewer subagents.** Fan-out is the thing being
     measured, not the thing being discouraged; the advice is to right-size a tier or a fan-out,
     never to stop delegating.
-13. **The ceiling is an estimate inferred from this machine's own history and is always labelled
-    approximate**, unless the user pinned `ceiling.override` by hand.
+13. **The ceiling names its own method wherever it is shown.** `quota-fit` is fitted against the
+    utilization Anthropic reports, `override` is what the user pinned, and `top-cluster` is inferred
+    from this machine's own heavy weeks and is labelled an estimate, never a quota.
 
 ### Platform and output correctness
 
@@ -187,9 +188,9 @@ spawned it.
 
 ## Goals
 
-1. Report spend against the user's **real reset window**. The weekday is configurable and differs
-   per person; `Saturday` is only the shipped default and is flagged as unconfirmed until the user
-   confirms or the detector corrects it.
+1. Report spend against the user's **real reset window**, cut at the reset instant the usage
+   endpoint reports. `reset_weekday` and `reset_hour` are the fallback for a machine that has never
+   reached the endpoint.
 2. Attribute spend to sessions, repos, branches, models, effort tiers, and
    subagent types.
 3. Explain deltas by **cause**, with a token figure attached to each cause.
@@ -265,6 +266,12 @@ Window boundaries are evaluated in the zone named by `config.timezone`. A `null`
 default — means the machine's own zone, resolved through a `tzinfo` derived from the platform so
 that daylight saving is honoured for historical timestamps rather than frozen at today's offset.
 Pinning an IANA name keeps boundaries stable for someone who moves between zones.
+
+### `quota.py` — the real quota and its reset instant
+
+Reads the OAuth token Claude Code stores, calls `oauth/usage` with a 10 s timeout,
+and appends one sample per collect. It never refreshes the token and never writes
+anything on a failure. See [Reset instant](#reset-instant).
 
 ### `rules.py` — the reasons engine
 
@@ -364,8 +371,9 @@ Interface: `report.main(argv)`, reached from the CLI as
 
 ### `cli.py` — the single entry point
 
-One `argparse` front end with five subcommands: `collect`, `report`, `status`, `tune`,
-`install-schedule`. It also owns the scheduler renderers and interpreter resolution.
+One `argparse` front end with six subcommands: `collect`, `report`, `status`, `quota`, `tune`,
+`install-schedule`. It also owns the scheduler renderers and interpreter resolution. `quota` prints
+the latest usage sample and the ceiling derived from it, for debugging.
 
 `bin/my-token-spend` (POSIX sh) and `bin/my-token-spend.ps1` (PowerShell) are the documented entry
 points. They exist because no single interpreter *name* is portable: `python3` is absent on a stock
@@ -386,11 +394,11 @@ written before a key existed still gets the shipped value.
 ```
 transcript_root      where transcripts are read from
 timezone             IANA name, or null for this machine's zone
-reset_weekday        default Saturday, flagged unconfirmed until the user says
-reset_hour           local hour the window rolls over
+reset_weekday        fallback weekday, used only until a quota sample lands
+reset_hour           fallback local hour the window rolls over
 token_class_weights  per-token-class multipliers
 model_weights        per-model multipliers, plus default_model_weight
-ceiling              override, and the top-cluster calibration parameters
+ceiling              override, the quota-fit parameters, and the top-cluster calibration
 narrative_model      model the single headless call uses
 prompt_label_chars   how much of a user prompt is stored as a label, 400; raising it improves
                      labels on newly collected turns only, never history already stored
@@ -432,18 +440,30 @@ at; `unknown_models` in the window JSON is the record of it, not the alarm.
 
 ## Ceiling calibration
 
-No local source of truth exists for the weekly limit, and `/usage` scraping was
-rejected as fragile. Instead, the first backfill run computes weighted totals for
-every historical window. Windows whose totals cluster at the top of the observed
-distribution are treated as windows where the cap was approached, and the ceiling
-estimate is derived from that cluster.
+Three methods, tried in order, all behind one function.
 
-The estimate is explicitly approximate and is reported as such in every file.
-It is confined to a single function so that a future `/usage` scraper, or a
-hand-set value, can replace it without touching anything downstream.
+`quota-fit` is the first. Each quota sample pairs a reported utilization with the
+weighted spend of its window at that instant, so the two are a line through the
+origin and the ceiling is its slope: a least-squares fit of
+`weighted_so_far = ceiling * pct / 100`. The residual spread is reported as the
+confidence band. Samples below `min_pct` are dropped, because at one percent
+utilization a one-percent rounding step is a 100% relative error, and fewer than
+`min_samples` points is no fit at all. Only the current and the previous
+`windows - 1` windows count, so a limit change ages out. When the newest sample
+is younger than `fresh_hours`, `percent_used` is that sample's own figure rather
+than the fit of it: Anthropic's number beats a fit of Anthropic's numbers.
 
-Derived figures: percent of ceiling consumed, current burn rate against the rate
-sustainable for the remainder of the window, and projected exhaustion date.
+`override` is next, whatever the user pinned by hand.
+
+`top-cluster` is the fallback for a machine that has never reached the endpoint.
+The first backfill run computes weighted totals for every historical window,
+windows whose totals cluster at the top of the observed distribution are treated
+as windows where the cap was approached, and the ceiling is derived from that
+cluster. It is an estimate of a habit, not a quota, and every place that shows
+it says so.
+
+Derived figures: percent consumed, current burn rate against the rate sustainable
+for the remainder of the window, and projected exhaustion date.
 
 ## Layout
 
@@ -531,9 +551,18 @@ notice. Mitigation: normalization is confined to one function, unknown fields ar
 ignored, and a run that finds zero parseable usage records reports that loudly
 rather than silently writing an empty window.
 
-The ceiling estimate is inferred, not authoritative, and will drift if Anthropic
-changes limits. Mitigation: it is reported as an estimate, isolated behind one
-function, and overridable in config.
+The `oauth/usage` endpoint is undocumented and can change shape or disappear.
+Mitigation: every failure is a skip with one log line, the collector finishes
+without it, and both the window cut and the ceiling fall back to what the plugin
+inferred before.
+
+The token is read but never refreshed, because Claude Code owns the refresh
+rotation and a second refresher would invalidate its session. An expired token
+is a skip until Claude Code's next run renews it.
+
+The token and the transcripts can belong to different accounts. Nothing local
+distinguishes them, so the quota would be the token owner's while the spend is
+this machine's. This is not detectable and is not mitigated.
 
 Transcripts are local to this machine. Sessions run elsewhere are invisible and
 the reports will understate spend accordingly.
@@ -598,11 +627,16 @@ findings_by_rule {rule: {count, weighted_cost}}, ranked by weighted_cost desc
 
 ceiling
   estimate               weighted tokens, or null
-  method                 override | top-cluster | insufficient-data
+  method                 quota-fit | override | top-cluster | insufficient-data
   approximate            false only for an override
   cluster_size           windows averaged to produce the estimate
   windows_considered
+  samples_used           quota samples behind a quota-fit
+  band_pct               residual spread of the fit, as a percent
+  latest_pct             the newest reported utilization
+  latest_pct_is_fresh    true when that sample is younger than fresh_hours
   percent_used           null when no estimate exists
+  percent_used_source    quota-sample | ceiling-estimate
   burn_rate_per_day      weighted / elapsed_days
   remaining_weighted
   sustainable_rate_per_day  remaining budget / days left in the window
@@ -960,7 +994,7 @@ Commands and skills invoke `python3 "${CLAUDE_PLUGIN_ROOT}/src/cli.py"`. Exec
 form cannot run `.cmd` shims on Windows, so the interpreter is always invoked
 directly. `${...}` placeholders are quoted for paths containing spaces.
 
-Subcommands: `collect`, `report`, `status`, `tune`, `install-schedule`.
+Subcommands: `collect`, `report`, `status`, `quota`, `tune`, `install-schedule`.
 
 ## Storage
 
@@ -978,22 +1012,24 @@ There is no migration path from any earlier layout. A `collect --migrate-from DI
 briefly for exactly one pre-plugin install and was removed as dead weight; see
 [Superseded decisions](#superseded-decisions).
 
-## Reset day detection
+## Reset instant
 
-The weekly reset weekday differs per person and no local source records it.
-Transcripts were searched across the full corpus and contain no rate-limit or
-reset message, because the cap has never been reached on this machine.
+`GET https://api.anthropic.com/api/oauth/usage`, with the OAuth token Claude Code
+stores in `~/.claude/.credentials.json` or in the macOS Keychain under
+`Claude Code-credentials`, reports `seven_day.utilization` as a percent and
+`seven_day.resets_at` as a UTC instant. The collector appends one sample per run
+to `data/quota_samples.jsonl`, tagged with the window spend at that moment.
 
-Two mechanisms, in order:
+Windows are cut at those instants. The window containing a moment starts at the
+latest known instant at or before it, stepping by exactly seven days beyond the
+sampled range in either direction, and ends at the next known instant or seven
+days later, whichever comes first. `resets_at` jitters by fractions of a second
+between calls, so instants are rounded to the minute before they are compared.
+Window keys stay the local date of the start instant, so old reports still line
+up. With no sample at all the cut falls back to `reset_weekday` + `reset_hour`.
 
-1. First run asks once and writes the answer to config.
-2. The collector opportunistically watches transcript lines for the rate-limit
-   or reset notice Claude Code emits when a user approaches their cap. On a
-   confident match it corrects the configured weekday and records the correction
-   in the next report.
-
-The message format is unverified, so the detector matches several candidate
-patterns and never overrides configuration on a partial or ambiguous match.
+When the first sample moves a boundary under records already stored, `collect`
+names the affected windows and asks for `collect --recut-windows`.
 
 ## Scheduling
 
@@ -1129,5 +1165,6 @@ Kept for the reasoning, not as instructions. Nothing in this section describes c
 | `tune` analysing a single window | Aggregates the last 4 closed windows by default | Advice fitted to one heavy week is advice about that week. The single-window mode survives behind `--window` and says loudly that it is fitted to one week |
 | The full tool-result text kept in a second transcript scan | The record's own `result_chars`, `is_error` and `denied` per tool call | The collector already reads every transcript line once and holds the tool ids; a second pass to recover outcomes cost a full rescan and could only see transcripts that had not been pruned |
 | `ceiling_estimate` as a single config key | A `ceiling` block: `override`, `top_cluster_fraction`, `min_windows`, `headroom` | The estimate needed its calibration parameters exposed, not just its result |
-| Scraping `/usage` for the true remaining quota | Never built | Rejected as fragile at design time, and still is. The ceiling is inferred from the user's own history and labelled an estimate everywhere |
+| Scraping `/usage` for the true remaining quota | The `oauth/usage` endpoint, sampled once per collect | Scraping the web page was rejected as fragile and still is. The endpoint the CLI itself calls is not, and it reports both the utilization and the reset instant the plugin had been inferring |
+| Guessing the reset weekday from limit-notice wording in transcripts | Removed, with `reset_weekday_confirmed` and `reset_weekday_source` | The corpus contained no such notice, so the detector never fired, and the endpoint answers the question outright |
 
