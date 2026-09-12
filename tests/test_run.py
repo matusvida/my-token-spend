@@ -317,3 +317,65 @@ def test_a_non_agent_tool_call_is_not_an_agent_dispatch(workspace):
     )
     run(workspace)
     assert not list((workspace["out"] / "data" / "records").glob("agent_calls_*.jsonl"))
+
+
+def cost_state_line(session, usd, ts_models=None):
+    return json.dumps(
+        {
+            "type": "cost-state",
+            "sessionId": session,
+            "totalCostUSD": usd,
+            "modelUsage": ts_models
+            or {"claude-sonnet-5": {"inputTokens": 10, "outputTokens": 1000, "costUSD": usd}},
+        }
+    )
+
+
+def test_run_prices_a_window_from_the_cost_state_entries(workspace):
+    (workspace["proj"] / "a.jsonl").write_text(
+        "\n".join(
+            [
+                assistant_line("u1", "2026-08-25T10:00:00Z"),
+                cost_state_line("s1", 0.5),
+                assistant_line("u2", "2026-08-25T11:00:00Z"),
+                cost_state_line("s1", 1.25),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = run(workspace)
+    block = summary["windows"][0]["cost_usd"]
+    assert block["usd"] == 1.25
+    assert block["priced_sessions"] == 1
+    assert "not what the subscription bills" in block["label"]
+
+
+def test_a_session_is_priced_into_the_window_its_first_record_falls_in(workspace):
+    (workspace["proj"] / "a.jsonl").write_text(
+        "\n".join(
+            [
+                assistant_line("u1", "2026-08-21T10:00:00Z"),
+                assistant_line("u2", "2026-08-25T10:00:00Z"),
+                cost_state_line("s1", 2.0),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = run(workspace)
+    by_key = {w["window"]["key"]: w["cost_usd"] for w in summary["windows"]}
+    assert by_key["week_2026_08_15"]["usd"] == 2.0
+    assert by_key["week_2026_08_22"]["usd"] is None
+
+
+def test_the_cost_store_survives_a_transcript_that_no_longer_carries_the_state(workspace):
+    path = workspace["proj"] / "a.jsonl"
+    path.write_text(
+        assistant_line("u1", "2026-08-25T10:00:00Z") + "\n" + cost_state_line("s1", 3.0) + "\n",
+        encoding="utf-8",
+    )
+    run(workspace)
+    path.write_text(assistant_line("u1", "2026-08-25T10:00:00Z") + "\n", encoding="utf-8")
+    summary = run(workspace, backfill=True)
+    assert summary["windows"][0]["cost_usd"]["usd"] == 3.0

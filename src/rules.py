@@ -526,6 +526,7 @@ def round_trips(records):
     api_errors = 0
     api_error_cost = 0.0
     by_tool = Counter()
+    per_tool = defaultdict(lambda: {"failures": 0, "retries": 0, "denied": 0, "weighted": 0.0})
 
     for session in _ordered_sessions(records).values():
         flat = []
@@ -549,14 +550,18 @@ def round_trips(records):
             failed_cost += share
             by_tool[name] += 1
             first_failure.setdefault((name, digest), position)
+            per_tool[name]["failures"] += 1
+            per_tool[name]["weighted"] += share
             if tool.get("denied"):
                 denied += 1
                 denied_cost += share
+                per_tool[name]["denied"] += 1
         for position, (name, digest, share, tool) in enumerate(flat):
             origin = first_failure.get((name, digest))
             if origin is not None and position > origin and tool.get("is_error"):
                 retried += 1
                 retried_cost += share
+                per_tool[name]["retries"] += 1
 
     detectors = [
         _detector(
@@ -600,6 +605,10 @@ def round_trips(records):
         "total_calls": total_calls,
         "resolved_calls": resolved_calls,
         "result_coverage": (resolved_calls / total_calls) if total_calls else 0.0,
+        "by_tool": sorted(
+            ({"tool": name, **counts} for name, counts in per_tool.items()),
+            key=lambda row: (-row["weighted"], row["tool"]),
+        ),
         "weighted": total_weighted,
         "detectors": detectors,
     }

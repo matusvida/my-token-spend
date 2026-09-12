@@ -574,3 +574,53 @@ def test_a_cluster_list_states_how_many_runs_a_description_was_recovered_for():
     runs = rootcause.group_runs(_dispatched_records([("r0", PROMPT_A), ("r1", PROMPT_B)]), agent_calls=calls)
     assert rootcause.description_coverage(runs) == {"described": 1, "runs": 2, "share": 0.5}
     assert rootcause.description_note(runs) == "descriptions recovered for 50% of runs"
+
+
+def _described_runs(count):
+    records = []
+    for index in range(count):
+        records.append(
+            rec(
+                ts(index),
+                run="r%02d" % index,
+                agent="general-purpose",
+                sidechain=True,
+                output=1000 - index,
+                uuid="u%02d" % index,
+                tools=[{"name": "Bash", "hash": "h%02d" % index}],
+            )
+        )
+    calls = {
+        "c%02d" % index: {
+            "tool_use_id": "c%02d" % index,
+            "ts": ts(0),
+            "sessionId": "s1",
+            "description": "job number %02d" % index,
+            "model": "claude-opus-5",
+            "prompt_chars": 100,
+            "prompt_head": None,
+        }
+        for index in range(count)
+    }
+    runs = rootcause.group_runs(records, agent_calls=calls)
+    for run in runs:
+        run["description"] = "job number %s" % run["id"][1:]
+    return runs
+
+
+def test_the_default_cluster_cap_keeps_twelve_named_jobs():
+    assert CONFIG["rootcause"]["max_clusters"] == 12
+    assert rootcause.settings({})["max_clusters"] == 12
+
+
+def test_clusters_beyond_the_cap_collapse_into_a_tail_that_counts_its_runs():
+    clusters = rootcause.cluster_runs(_described_runs(20), max_clusters=12)
+    assert len(clusters) == 13
+    tail = clusters[-1]
+    assert tail["runs"] == 8
+    assert tail["confidence"] == "not clustered"
+    assert rootcause.tail_note(clusters) == "the last bar holds 8 runs"
+
+
+def test_a_cluster_list_that_fits_the_cap_has_no_tail_note():
+    assert rootcause.tail_note(rootcause.cluster_runs(_described_runs(4), max_clusters=12)) is None

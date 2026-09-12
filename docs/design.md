@@ -260,12 +260,31 @@ same file.
 Interface: `collect.run(...)` and `collect.recut(...)`, reached from the CLI as
 `collect [--backfill] [--recut-windows] [--reprice] [--rebuild-from-transcripts-only]
 [--window YYYY-MM-DD]`.
-Depends on `config.json`, `state.json`, `rules.py`, `context.py`.
+Depends on `config.json`, `state.json`, `rules.py`, `context.py`, `cost.py`.
 
 Window boundaries are evaluated in the zone named by `config.timezone`. A `null` value — the shipped
 default — means the machine's own zone, resolved through a `tzinfo` derived from the platform so
 that daylight saving is honoured for historical timestamps rather than frozen at today's offset.
 Pinning an IANA name keeps boundaries stable for someone who moves between zones.
+
+### `cost.py` — the list-price USD figure
+
+Claude Code writes a `cost-state` entry into the transcript after every turn, carrying the session's
+running `totalCostUSD` and per-model token counts. The last such entry in a session is that session's
+total, so `collect` keeps the last one it has seen per file and merges them into
+`data/session_costs.json`, which is durable and never shrinks: a pruned transcript keeps its price.
+
+A window's USD is the sum over the sessions whose **first** record falls inside it, so a session that
+straddles a reset is priced once, in the window it started in. The figure is labelled *list price, as
+`/cost` shows it; not what the subscription bills* everywhere it is shown — it is Claude Code's own
+estimate of what the same tokens would have cost on the API, not a billing figure.
+
+`collect --calibrate-weights` fits, per model, the four token-class prices that best explain the
+stored session totals (least squares over `input`, `output`, `cache_create`, `cache_read`), divides
+them by the input price, and prints the result next to the configured `token_class_weights`. It needs
+at least eight sessions per model and refuses a fit whose residual exceeds 5% of the spend or whose
+prices are not all positive, because sessions with near-identical token mixes cannot separate four
+classes. It writes nothing; changing the weights stays a human decision.
 
 ### `quota.py` — the real quota and its reset instant
 
@@ -409,6 +428,12 @@ description, so the label is quoted rather than inferred. A cluster whose runs s
 but not a job label is printed as `MIXED`. Not every run can be joined to its dispatch, so every
 cluster list states the share of runs a description was recovered for.
 
+**Cluster cap.** A description names one job, so most description clusters hold a single run and a
+window produces far more clusters than the eight the tool-mix labels used to produce. Clusters are
+ranked by weighted cost and the first `rootcause.max_clusters` (12) are kept; everything below folds
+into one tail bar, and `tail_note` states how many clusters and how many runs that bar holds, so the
+collapsed remainder is never silently dropped.
+
 **Tool coverage is stated, never hidden.** `tools` is populated on roughly half the turns — a
 text-only turn records none — so every per-cluster and per-finding tool share is accompanied by the
 share of turns that recorded any tool call at all.
@@ -416,14 +441,56 @@ share of turns that recorded any tool call at all.
 ### `report.py` — weekly HTML
 
 Reads every `data/week_*.json` plus the target window's `data/records/<key>.jsonl`, and renders one
-self-contained HTML page. The reading path is, in order: a **Verdict** block (window position
-against the ceiling, burn rate against the sustainable rate, week-over-week delta, and the three
-top-ranked actions), the narrative, **Findings** each with its root-cause line inline and its
-evidence behind a `<details>`, a **drill-down** that splits the largest agent types and skills into
-the jobs their runs actually did, one **Raw breakdowns** section holding every earlier section
-collapsed and unchanged (cross-week comparison, delta decomposition, burn detail, where-this-window
-went, top sessions, whale turns, headline tiles), then Rule lenses and Recommendations. A spike must
-attribute to `+610k: subagent storm in dynamic-pricing`, never to a taller unexplained bar.
+self-contained HTML page. The reading path is, in order:
+
+1. **Verdict** — four tiles (quota or ceiling used with the method named, weighted spent, list-price
+   USD, the share of subagent spend no agent type claims) over a seven-day burn line against the
+   quota with the reset instant marked.
+2. **Do these first** — at most three cards, each one claim, the threshold it was counted at, one
+   number, a risk and a confidence badge, and a link to its finding's chart. The overlap notice
+   appears here, once.
+3. **Why this week looked like this** — the narrative, capped at 120 words.
+4. **Findings** — one card per finding group, carrying exactly one chart or table as its evidence.
+   Everything else, the root-cause line included, sits behind a `<details>`.
+5. **Cost centres** — one ranked bar chart per lane: description-named jobs, MCP servers, plugins,
+   skills, repos, models. Each footer states the coverage of the field its lane groups by.
+6. **Raw breakdowns** — every earlier section, collapsed and unchanged.
+7. **Recommendations** — the existing grouping, plus a `headroom` group that renders only when a
+   recommendation of that kind exists. Each group carries an `id="rec-<group>"` anchor, shows its two
+   largest cards and folds the rest into a `<details>`.
+
+**Under-spend is not a cause of spend.** The `headroom` finding's `weighted_cost` is the quota that
+expired unused, so it would lead every cost ranking on the page. It is excluded from the findings
+cards, the rule-lens tables, the delta decomposition's cause precedence and the console summary's top
+causes, and rendered instead as one line under the Verdict tiles — *"1.8B unused of your quota, two
+windows running"* — linking to `#rec-headroom`. A headroom recommendation carries its figure in
+`weighted_headroom`, not `weighted_saving`, so `report.figure_of` returns the value and its basis, the
+cards read "headroom, N% of the window" rather than a share of savings, and the recommendations table
+has a `basis` column.
+
+A spike must attribute to a named job, never to a taller unexplained bar.
+
+**One chart per rule.** `context_bloat` draws the session's context over time, coloured by the tool
+whose results grew it, with the threshold line and the compaction markers. `subagent_storm` draws a
+run timeline labelled with the orchestrator's descriptions, so overlap is visible. `model_mismatch`
+is a scatter of output tokens against tool calls with the counted-trivial region drawn as a box.
+`agent_type_skew` is a bar per job cluster with the no-run-id residual as its own bar. `whale_turns`
+decomposes the costliest turns by token class. `redundant_reads`, `loop_retry` and the round-trip
+detectors get tables.
+
+**Word budget.** Visible text outside `<details>` is capped at 1,500 words, measured by
+`report.visible_words`, which drops every `<details>` body but keeps its `<summary>`, and counts the
+text inside the SVG charts like any other. A test renders a real-shaped fixture window through
+`collect.aggregate_window` and fails above the cap. Three things hold the budget on a busy window:
+the narrative is clipped to `NARRATIVE_WORDS` (120) at render time as well as asked for in the
+prompt, each recommendation group shows its three largest cards and folds the rest into a
+`<details>`, and every chart caps its visible rows — the collapsed remainder is always stated, never
+dropped.
+
+`evidence.py` holds the per-card chart payloads and the lane rankings, and `charts.py` the SVG
+geometry; `report.py` is left with page assembly. `evidence.build` is attached to the root-cause
+analysis under the `evidence` key, so a window with no readable records degrades the same way the
+rest of the page does.
 
 The record store is an *optional* input: a window whose `.jsonl` is missing or unreadable still
 renders, with the root-cause and drill-down sections stating plainly that they had nothing to read.
@@ -545,8 +612,8 @@ my-token-spend/
   bin/my-token-spend  bin/my-token-spend.ps1
   commands/my-token-spend.md
   skills/my-token-spend/SKILL.md
-  src/  cli.py collect.py rules.py context.py rootcause.py advice.py report.py tune.py
-        paths.py
+  src/  cli.py collect.py rules.py context.py cost.py rootcause.py advice.py evidence.py
+        report.py charts.py tune.py quota.py paths.py
         config.default.json
   docs/design.md  README.md
 ```

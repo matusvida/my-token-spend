@@ -35,7 +35,7 @@
   "rootcause": {
     "min_centre_share": 0.03,
     "max_centres": 6,
-    "max_clusters": 8,
+    "max_clusters": 12,
     "max_findings": 12,
     "label_chars": 90
   },

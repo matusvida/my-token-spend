@@ -118,3 +118,19 @@ def test_the_detectors_need_no_transcript():
     source = (Path(__file__).resolve().parents[1] / "src" / "rules.py").read_text(encoding="utf-8")
     for forbidden in ("open(", "rglob", "read_text", "Path("):
         assert forbidden not in source
+
+
+def test_round_trips_break_the_failures_down_per_tool():
+    analysis = rules.round_trips(
+        [
+            record("u1", tools=[tool("Bash", "h1", is_error=True)], weighted=100.0),
+            record("u2", tools=[tool("Bash", "h1", is_error=True)], weighted=100.0),
+            record("u3", tools=[tool("Read", "h2", is_error=True, denied=True)], weighted=60.0),
+            record("u4", tools=[tool("Glob", "h3")], weighted=40.0),
+        ]
+    )
+    rows = {row["tool"]: row for row in analysis["by_tool"]}
+    assert rows["Bash"] == {"tool": "Bash", "failures": 2, "retries": 1, "denied": 0, "weighted": 200.0}
+    assert rows["Read"]["denied"] == 1
+    assert "Glob" not in rows
+    assert [row["tool"] for row in analysis["by_tool"]] == ["Bash", "Read"]
