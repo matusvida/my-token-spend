@@ -56,6 +56,7 @@
       "downgrade_model": "claude-sonnet-5",
       "max_output_tokens": 250,
       "max_tool_calls": 1,
+      "max_thinking": 200,
       "min_total_weighted": 100000
     },
     "redundant_reads": {

@@ -115,7 +115,7 @@ def test_model_downgrade_saving_is_the_finding_cost_verbatim():
     assert "the work is identical" not in result[0]["detail"]
     assert "quality tradeoff" in result[0]["detail"]
     assert "recorded nowhere in this data" in result[0]["detail"]
-    assert result[0]["confidence"] == "high"
+    assert result[0]["confidence"] == "medium"
     assert result[0]["group"] == advice.WASTE
     assert "claude-sonnet-5" in result[0]["action"]
     assert "1628" in result[0]["detail"]
@@ -269,9 +269,9 @@ def test_ranking_is_saving_times_confidence():
         finding("context_bloat", "s1", 15000000.0, turns=511, excess_cache_read_tokens=10, peak_cache_read=1, cwd="C:\\a", first_ts="t", last_ts="t"),
     ]
     result = advice.recommend(window(100000000.0), findings, CONFIG)
-    assert [item["kind"] for item in result] == ["model_downgrade", "reset_context"]
-    assert result[0]["score"] == pytest.approx(10000000.0)
-    assert result[1]["score"] == pytest.approx(9000000.0)
+    assert [item["kind"] for item in result] == ["reset_context", "model_downgrade"]
+    assert result[0]["score"] == pytest.approx(9000000.0)
+    assert result[1]["score"] == pytest.approx(6000000.0)
 
 
 def test_every_recommendation_carries_the_full_contract():

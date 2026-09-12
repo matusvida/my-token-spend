@@ -185,6 +185,20 @@ def agent_type_skew(records, config):
     ]
 
 
+MAX_THINKING_DEFAULT = 200
+DISPATCH_TOOL = "Agent"
+
+
+def trivial_turn(record, settings):
+    if record["output"] > settings["max_output_tokens"]:
+        return False
+    if not 1 <= len(record["tools"]) <= settings["max_tool_calls"]:
+        return False
+    if (record.get("thinking") or 0) > settings.get("max_thinking", MAX_THINKING_DEFAULT):
+        return False
+    return all(tool["name"] != DISPATCH_TOOL for tool in record["tools"])
+
+
 def model_mismatch(records, config):
     settings = config["thresholds"]["model_mismatch"]
     downgrade = settings["downgrade_model"]
@@ -194,9 +208,7 @@ def model_mismatch(records, config):
         weight = _model_weight(record, config)
         if weight <= downgrade_weight:
             continue
-        if record["output"] > settings["max_output_tokens"]:
-            continue
-        if not 1 <= len(record["tools"]) <= settings["max_tool_calls"]:
+        if not trivial_turn(record, settings):
             continue
         bucket = per_model[record["model"]]
         bucket["cost"] += (weight - downgrade_weight) * _raw_weighted(record, config)
@@ -205,8 +217,19 @@ def model_mismatch(records, config):
         _finding(
             "model_mismatch",
             model,
-            "%d trivial %s turns would have cost %s weighted tokens less on %s"
-            % (bucket["turns"], model, f"{bucket['cost']:,.0f}", downgrade),
+            "%d %s turns produced at most %d output tokens with between 1 and %d tool call(s), at most %d "
+            "thinking tokens and no %s dispatch among them; they would have cost %s weighted tokens less "
+            "on %s"
+            % (
+                bucket["turns"],
+                model,
+                settings["max_output_tokens"],
+                settings["max_tool_calls"],
+                settings.get("max_thinking", MAX_THINKING_DEFAULT),
+                DISPATCH_TOOL,
+                f"{bucket['cost']:,.0f}",
+                downgrade,
+            ),
             bucket["cost"],
             {"turns": bucket["turns"], "downgrade_model": downgrade},
         )

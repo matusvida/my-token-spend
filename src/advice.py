@@ -104,19 +104,22 @@ def _model_downgrades(findings, config):
                 "Run trivial %s turns on %s" % (finding["subject"], target),
                 "Add `\"model\": \"%s\"` to the agent definitions that only fetch, grep or confirm, "
                 "and open one-tool sessions with `/model %s`." % (target, _model_family(target)),
-                "%d turns produced under %d output tokens with at most %d tool call. Priced at %s they "
-                "cost this much less. Only the token counts are identical: a tier change is a quality "
-                "tradeoff, and whether the cheaper tier reaches the same answers is recorded nowhere in "
-                "this data."
+                "%d turns produced at most %d output tokens with between 1 and %d tool call(s), at most "
+                "%d thinking tokens and no Agent dispatch among them. Priced at %s they cost this much "
+                "less. Only the token counts are identical: a tier change is a quality tradeoff, and "
+                "whether the cheaper tier reaches the same answers is recorded nowhere in this data. The "
+                "rule still cannot see what a turn decided, so a short answer reached after real "
+                "judgement is counted here too."
                 % (
                     turns,
                     config["thresholds"]["model_mismatch"]["max_output_tokens"],
                     config["thresholds"]["model_mismatch"]["max_tool_calls"],
+                    config["thresholds"]["model_mismatch"].get("max_thinking", rules.MAX_THINKING_DEFAULT),
                     target,
                 ),
                 finding["weighted_cost"],
                 "low",
-                "high",
+                "medium",
                 {"turns": turns, "downgrade_model": target},
             )
         )

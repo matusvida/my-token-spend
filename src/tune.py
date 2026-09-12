@@ -181,9 +181,7 @@ def _trivial_by_agent(records, config, pricing):
     totals = defaultdict(lambda: {"weighted": 0.0, "turns": 0})
     for record in records:
         agent = record.get("attributionAgent")
-        if not agent or record["output"] > thresholds["max_output_tokens"]:
-            continue
-        if not 1 <= len(record["tools"]) <= thresholds["max_tool_calls"]:
+        if not agent or not rules.trivial_turn(record, thresholds):
             continue
         weight = rules.model_weight(record["model"], pricing)[0]
         if weight <= downgrade_weight:
@@ -696,11 +694,16 @@ def _reconciliation(windows, current, entries, proposals, setting_proposals, con
             % (len(windows), _short(analysed["typical_weighted"]))
         )
     reasons.append(
-        "formula: the rule re-prices individual turns that produced under %d output tokens with at most %d "
-        "tool call. A proposal here prices a whole component instead - its typical window cost x the share "
-        "of the window that ran above %s x the price gap - and only where a file or a setting can carry "
-        "the change."
-        % (thresholds["max_output_tokens"], thresholds["max_tool_calls"], thresholds["downgrade_model"])
+        "formula: the rule re-prices individual turns that produced at most %d output tokens with between 1 "
+        "and %d tool call(s), at most %d thinking tokens and no Agent dispatch among them. A proposal here "
+        "prices a whole component instead - its typical window cost x the share of the window that ran "
+        "above %s x the price gap - and only where a file or a setting can carry the change."
+        % (
+            thresholds["max_output_tokens"],
+            thresholds["max_tool_calls"],
+            thresholds.get("max_thinking", rules.MAX_THINKING_DEFAULT),
+            thresholds["downgrade_model"],
+        )
     )
     if unpatchable:
         reasons.append(
