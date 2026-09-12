@@ -154,4 +154,4 @@ def test_the_round_trip_card_states_window_totals_not_the_visible_rows():
     html = report._round_trip_card(card)
     assert ">6 failed<" in html
     assert "Top 4 of 6 tools." in html
-    assert "including the calls that failed again on the same input" in html
+    assert "including calls that failed again on the same input" in html

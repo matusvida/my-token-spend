@@ -1722,7 +1722,7 @@ def _round_trip_card(card):
     return (
         '<div class="finding" id="%s"><div class="finding-head"><span class="finding-rule">round trips</span>'
         '<span class="finding-subject">%s failed</span><span class="finding-cost">%s</span></div>'
-        '<div class="finding-detail">Tool calls that came back as an error, including the calls that failed '
+        '<div class="finding-detail">Tool calls that came back as an error, including calls that failed '
         "again on the same input.</div>"
         '<div class="finding-threshold">Counted at %s.</div>%s</div>'
         % (
