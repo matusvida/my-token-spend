@@ -1068,12 +1068,40 @@ def boundary_drift(stores, config, instants):
     return {"records": moved, "windows": sorted(windows)}
 
 
-def _poll_quota(quota_poll, data_dir, windows, config, instants):
+THROTTLE_MINUTES = 30
+
+
+def _throttled_until(state, now):
+    stored = state.get("quota_throttled_at")
+    if not stored:
+        return None
+    try:
+        stamp = parse_ts(stored)
+    except ValueError:
+        return None
+    until = stamp + timedelta(minutes=THROTTLE_MINUTES)
+    return until if until > now else None
+
+
+def _poll_quota(quota_poll, data_dir, windows, config, instants, state, now=None):
     if quota_poll is None:
         return {"sample": None, "skipped": "quota polling was not enabled for this run"}
-    key = window_start(datetime.now(timezone.utc), config, instants).isoformat()
+    now = now or datetime.now(timezone.utc)
+    until = _throttled_until(state, now)
+    if until is not None:
+        return {
+            "sample": None,
+            "skipped": "the usage endpoint answered 429 less than %d minutes ago; not polling again before %s"
+            % (THROTTLE_MINUTES, until.isoformat(timespec="seconds")),
+        }
+    key = window_start(now, config, instants).isoformat()
     weighted = sum(record["weighted"] for record in windows.get(key) or [])
-    return quota_poll(data_dir, weighted)
+    result = quota_poll(data_dir, weighted)
+    if result.get("status") == 429:
+        state["quota_throttled_at"] = now.isoformat()
+    else:
+        state.pop("quota_throttled_at", None)
+    return result
 
 
 def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_from_transcripts_only=False, quota_poll=None):
@@ -1133,10 +1161,11 @@ def run(config, root, out_dir, state_path, backfill=False, window=None, rebuild_
         store_dir, fresh_calls, config, discard_stored=rebuild_from_transcripts_only, instants=instants
     )
 
+    quota_result = _poll_quota(quota_poll, data_dir, windows, config, instants, state)
     _write_json(state_path, state)
     return {
         "windows": written,
-        "quota": _poll_quota(quota_poll, data_dir, windows, config, instants),
+        "quota": quota_result,
         "boundary_changed": boundary_drift(known, config, instants),
         "new_records": len(fresh),
         "total_records": sum(len(r) for r in windows.values()),

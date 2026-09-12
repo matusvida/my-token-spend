@@ -18,7 +18,9 @@ WEEK = timedelta(days=7)
 
 
 class QuotaError(Exception):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 def samples_path(data_dir):
@@ -85,10 +87,10 @@ def fetch(token, url=USAGE_URL, timeout=TIMEOUT_SECONDS, opener=None):
         with (opener or urllib.request.urlopen)(request, timeout=timeout) as response:
             status = getattr(response, "status", 200)
             if status != 200:
-                raise QuotaError("the usage endpoint answered %s" % status)
+                raise QuotaError("the usage endpoint answered %s" % status, status)
             body = response.read()
     except urllib.error.HTTPError as error:
-        raise QuotaError("the usage endpoint answered %s" % error.code)
+        raise QuotaError("the usage endpoint answered %s" % error.code, error.code)
     except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as error:
         raise QuotaError("the usage endpoint was unreachable within %ds (%s)" % (timeout, type(error).__name__))
     try:
@@ -137,16 +139,16 @@ def poll(data_dir, weighted_so_far, now=None, credentials_path=None, fetcher=Non
     now = now or datetime.now(timezone.utc)
     token, reason = read_token(credentials_path, now=now)
     if token is None:
-        return {"sample": None, "skipped": reason}
+        return {"sample": None, "skipped": reason, "status": None}
     try:
         payload = (fetcher or fetch)(token)
     except QuotaError as error:
-        return {"sample": None, "skipped": str(error)}
+        return {"sample": None, "skipped": str(error), "status": getattr(error, "status", None)}
     sample = sample_from(payload, now, weighted_so_far)
     if sample["seven_day_pct"] is None or not sample["seven_day_resets_at"]:
-        return {"sample": None, "skipped": "the usage endpoint returned no seven_day bucket"}
+        return {"sample": None, "skipped": "the usage endpoint returned no seven_day bucket", "status": 200}
     append_sample(data_dir, sample)
-    return {"sample": sample, "skipped": None}
+    return {"sample": sample, "skipped": None, "status": 200}
 
 
 def extra_usage_unused(samples, start, end):

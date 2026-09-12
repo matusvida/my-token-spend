@@ -298,3 +298,51 @@ def test_recut_rebuckets_the_agent_calls_too(tmp_path):
     write_sample(out, "2026-09-19T03:00:00.046991+00:00")
     collect.recut(CONFIG, out, out / "state.json")
     assert [p.name for p in store.glob("agent_calls_*.jsonl")] == ["agent_calls_week_2026_09_12.jsonl"]
+
+
+def test_a_429_stops_the_next_poll_inside_the_backoff_window(tmp_path):
+    out = tmp_path / "out"
+    root = transcript(tmp_path / "projects", "2026-09-19T04:00:00.000Z")
+    calls = []
+
+    def throttled(data_dir, weighted):
+        calls.append(weighted)
+        return {"sample": None, "skipped": "the usage endpoint answered 429", "status": 429}
+
+    first = collect.run(CONFIG, root, out, out / "state.json", quota_poll=throttled)
+    assert first["quota"]["skipped"].endswith("429")
+    state = json.loads((out / "state.json").read_text(encoding="utf-8"))
+    assert state["quota_throttled_at"]
+
+    second = collect.run(CONFIG, root, out, out / "state.json", quota_poll=throttled)
+    assert len(calls) == 1
+    assert "not polling again before" in second["quota"]["skipped"]
+    assert second["quota"]["sample"] is None
+    assert second["total_records"] == 1
+
+
+def test_the_backoff_expires_after_thirty_minutes(tmp_path):
+    out = tmp_path / "out"
+    root = transcript(tmp_path / "projects", "2026-09-19T04:00:00.000Z")
+    collect.run(
+        CONFIG,
+        root,
+        out,
+        out / "state.json",
+        quota_poll=lambda data_dir, weighted: {"sample": None, "skipped": "429", "status": 429},
+    )
+    path = out / "state.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    stale = datetime.now(timezone.utc) - timedelta(minutes=collect.THROTTLE_MINUTES + 1)
+    state["quota_throttled_at"] = stale.isoformat()
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    summary = collect.run(
+        CONFIG,
+        root,
+        out,
+        path,
+        quota_poll=lambda data_dir, weighted: {"sample": {"seven_day_pct": 4.0}, "skipped": None, "status": 200},
+    )
+    assert summary["quota"]["sample"]["seven_day_pct"] == 4.0
+    assert "quota_throttled_at" not in json.loads(path.read_text(encoding="utf-8"))
