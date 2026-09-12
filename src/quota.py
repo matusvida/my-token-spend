@@ -149,6 +149,19 @@ def poll(data_dir, weighted_so_far, now=None, credentials_path=None, fetcher=Non
     return {"sample": sample, "skipped": None}
 
 
+def extra_usage_unused(samples, start, end):
+    seen = None
+    for sample in samples:
+        stamp = _parse(sample.get("ts"))
+        if stamp is None or not start <= stamp < end:
+            continue
+        extra = sample.get("extra_usage") or {}
+        if not extra.get("is_enabled") or (extra.get("used_credits") or 0) != 0:
+            return None
+        seen = extra
+    return seen
+
+
 def load_samples(data_dir):
     path = samples_path(data_dir)
     if not path.exists():

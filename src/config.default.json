@@ -76,6 +76,12 @@
       "top_n": 10
     }
   },
+  "headroom": {
+    "max_pct": 60,
+    "min_thinking": 500,
+    "min_output": 800,
+    "min_serial_minutes": 20
+  },
   "advice": {
     "sonnet_class_agents": [
       "review-verifier",
