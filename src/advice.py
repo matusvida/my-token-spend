@@ -111,7 +111,7 @@ def _model_downgrades(findings, config):
                 "model_downgrade",
                 WASTE,
                 finding["subject"],
-                "Run trivial %s turns on %s" % (finding["subject"], target),
+                "Run short, single-tool %s turns on %s" % (finding["subject"], target),
                 "Add `\"model\": \"%s\"` to the agent definitions that only fetch, grep or confirm, "
                 "and open one-tool sessions with `/model %s`." % (target, _model_family(target)),
                 "%d turns produced at most %d output tokens with between 1 and %d tool call(s), at most "

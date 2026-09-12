@@ -530,13 +530,13 @@ def svg_scatter(chart, height=320):
             max(2.0, box_right - left),
             max(2.0, top + plot_height - box_top),
             esc(
-                "counted trivial: at most %d output tokens and %d tool call"
+                "counted here: at most %d output tokens and %d tool call"
                 % (chart["box"]["output"], chart["box"]["tools"])
             ),
         )
     )
     parts.append(
-        '<text class="region-label" x="%.2f" y="%.2f">trivial: %d output, %d tool call</text>'
+        '<text class="region-label" x="%.2f" y="%.2f">at most %d output, %d tool call</text>'
         % (box_right + 8, box_top + 14, chart["box"]["output"], chart["box"]["tools"])
     )
     for index, point in enumerate(points):

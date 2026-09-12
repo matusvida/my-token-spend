@@ -219,7 +219,8 @@ def test_every_rule_puts_its_own_evidence_on_the_page():
     assert 'id="whale_turns"' in findings
     assert 'id="round_trips"' in findings
     assert "threshold" in findings
-    assert "trivial: 250 output, 1 tool call" in findings
+    assert "at most 250 output, 1 tool call" in findings
+    assert "trivial" not in findings
     assert "coloured by the tool that grew it" in findings
 
 

@@ -357,3 +357,10 @@ def test_a_user_override_of_the_sonnet_class_list_still_wins():
     settings = advice._settings({"advice": {"sonnet_class_agents": ["only-this"]}})
     assert settings["sonnet_class_agents"] == ["only-this"]
     assert settings["min_saving"] == SHIPPED["advice"]["min_saving"]
+
+
+def test_model_downgrade_names_its_criteria_instead_of_judging_the_turns():
+    findings = [finding("model_mismatch", "claude-opus-5", 96200374.0, turns=1628, downgrade_model="claude-sonnet-5")]
+    result = only(advice.recommend(window(828033502.8), findings, CONFIG), "model_downgrade")[0]
+    assert result["title"] == "Run short, single-tool claude-opus-5 turns on claude-sonnet-5"
+    assert "trivial" not in result["title"]
