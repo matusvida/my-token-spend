@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import cli
+import agentfiles
 import tune
 
 CONFIG = json.loads((Path(__file__).resolve().parents[1] / "src" / "config.default.json").read_text(encoding="utf-8"))
@@ -44,7 +45,7 @@ def home(tmp_path):
 
 
 def roots_for(home, project_dirs=()):
-    return tune.default_roots(
+    return agentfiles.default_roots(
         user_home=home, project_dirs=project_dirs, plugins_home=home / ".claude" / "plugins"
     )
 
@@ -109,7 +110,9 @@ def record(
 
 
 def entry_for(result, name):
-    for entry in result["proposals"] + result["setting_proposals"] + result["reported"]:
+    for entry in (
+        result["proposals"] + result["setting_proposals"] + result["upgrade_proposals"] + result["reported"]
+    ):
         if entry["name"] == name:
             return entry
     raise AssertionError("no entry for %s" % name)
@@ -123,18 +126,18 @@ def build(windows, home, records=None, **kwargs):
 
 def test_a_name_that_resolves_to_exactly_one_file_is_mapped_to_it(home):
     path = agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
-    assert tune.resolve_agent("mr-scout", roots_for(home)) == [path]
+    assert agentfiles.resolve_agent("mr-scout", roots_for(home)) == [path]
 
 
 def test_a_name_that_resolves_to_no_file_resolves_to_nothing(home):
-    assert tune.resolve_agent("mr-scout", roots_for(home)) == []
+    assert agentfiles.resolve_agent("mr-scout", roots_for(home)) == []
 
 
 def test_a_name_that_resolves_to_several_files_returns_all_of_them(home, tmp_path):
     project = tmp_path / "repo"
     user_copy = agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
     project_copy = agent_file(project / ".claude" / "agents", "mr-scout", model="opus")
-    found = tune.resolve_agent("mr-scout", roots_for(home, project_dirs=[str(project)]))
+    found = agentfiles.resolve_agent("mr-scout", roots_for(home, project_dirs=[str(project)]))
     assert sorted(found) == sorted([user_copy, project_copy])
 
 
@@ -158,7 +161,7 @@ def test_several_matches_are_listed_and_no_edit_is_proposed(home, tmp_path):
 def test_a_file_is_matched_by_its_frontmatter_name_not_only_its_stem(home):
     directory = home / ".claude" / "agents"
     (directory / "renamed.md").write_text("---\nname: mr-scout\n---\n\nBody.\n", encoding="utf-8")
-    assert [p.name for p in tune.resolve_agent("mr-scout", roots_for(home))] == ["renamed.md"]
+    assert [p.name for p in agentfiles.resolve_agent("mr-scout", roots_for(home))] == ["renamed.md"]
 
 
 def test_a_plugin_qualified_name_only_matches_that_plugin(home):
@@ -175,25 +178,25 @@ def test_a_plugin_qualified_name_only_matches_that_plugin(home):
         ),
         encoding="utf-8",
     )
-    assert [str(p) for p in tune.resolve_skill("glab:glab", roots_for(home))] == [
+    assert [str(p) for p in agentfiles.resolve_skill("glab:glab", roots_for(home))] == [
         str(install / "skills" / "glab" / "SKILL.md")
     ]
-    assert [p.name for p in tune.resolve_skill("glab", roots_for(home))] == ["glab.md"]
-    assert len(tune.resolve_skill("glab:other", roots_for(home))) == 0
+    assert [p.name for p in agentfiles.resolve_skill("glab", roots_for(home))] == ["glab.md"]
+    assert len(agentfiles.resolve_skill("glab:other", roots_for(home))) == 0
 
 
 def test_a_skill_name_also_matches_a_slash_command_file(home):
     commands = home / ".claude" / "commands"
     commands.mkdir(parents=True)
     (commands / "review-mr.md").write_text("Review a merge request.\n", encoding="utf-8")
-    assert [p.name for p in tune.resolve_skill("review-mr", roots_for(home))] == ["review-mr.md"]
+    assert [p.name for p in agentfiles.resolve_skill("review-mr", roots_for(home))] == ["review-mr.md"]
 
 
 def test_a_reference_file_nested_inside_another_skill_is_not_a_match(home):
     nested = home / ".claude" / "skills" / "linear-mcp-cli" / "references"
     nested.mkdir(parents=True)
     (nested / "comments.md").write_text("reference material\n", encoding="utf-8")
-    assert tune.resolve_skill("comments", roots_for(home)) == []
+    assert agentfiles.resolve_skill("comments", roots_for(home)) == []
 
 
 def test_the_default_selection_is_the_last_n_closed_windows():
@@ -308,16 +311,21 @@ def test_a_single_window_analysis_lowers_the_floor_and_says_it_is_fitted_to_one_
     assert "SINGLE WINDOW" in tune.render(result)
 
 
-def test_a_builtin_agent_with_no_file_is_proposed_against_the_setting_never_dropped(home):
+def _builtin_windows(home, name):
     windows = four_windows([0, 0, 0, 0])
     for data in windows:
-        data["by_agent"] = [{"key": "general-purpose", "turns": 2624, "weighted": 208000000.0}]
+        data["by_agent"] = [{"key": name, "turns": 2624, "weighted": 208000000.0}]
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     (home / ".claude" / "settings.json").write_text(
         json.dumps({"env": {"CLAUDE_CODE_SUBAGENT_MODEL": "claude-opus-5"}}), encoding="utf-8"
     )
+    return windows
+
+
+def test_a_listed_builtin_agent_with_no_file_is_proposed_against_the_setting_never_dropped(home):
+    windows = _builtin_windows(home, "Explore")
     result = build(windows, home, setting=tune.subagent_model_setting(home))
-    entry = entry_for(result, "general-purpose")
+    entry = entry_for(result, "Explore")
     assert entry["status"] == tune.SETTING_PROPOSAL
     assert entry["typical_weighted"] == 208000000.0
     assert entry["files"] == []
@@ -327,12 +335,104 @@ def test_a_builtin_agent_with_no_file_is_proposed_against_the_setting_never_drop
     assert "208.0M" in tune.render(result)
 
 
+def test_an_ungated_builtin_agent_shows_its_cost_instead_of_a_setting_proposal(home):
+    windows = _builtin_windows(home, "general-purpose")
+    result = build(windows, home, setting=tune.subagent_model_setting(home))
+    entry = entry_for(result, "general-purpose")
+    assert entry["status"] == tune.NOT_ASSESSABLE
+    assert entry["weighted_saving"] is None
+    assert entry["typical_weighted"] == 208000000.0
+    assert "advice.sonnet_class_agents" in entry["note"]
+    assert result["setting_proposals"] == []
+
+
+def headroom_window(agents=(("deep-reviewer", 40, 20000000.0),), unused=400000000.0):
+    data = window(agents=list(agents))
+    data["findings_by_rule"] = {"headroom": {"count": 1, "weighted_cost": unused}}
+    return data
+
+
+def opus_config(names):
+    return dict(CONFIG, advice=dict(CONFIG["advice"], opus_class_agents=list(names)))
+
+
+def test_a_cheap_agent_on_the_opus_list_is_offered_the_tier_the_unused_quota_can_buy(home):
+    path = agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    result = tune.build(
+        [headroom_window()], opus_config(["deep-reviewer"]), roots=roots_for(home), now=NOW
+    )
+    entry = entry_for(result, "deep-reviewer")
+    assert entry["status"] == tune.UPGRADE_PROPOSAL
+    assert entry["files"] == [str(path)]
+    assert "model: opus" in entry["patch"]
+    assert entry["weighted_cost_increase"] == 80000000.0
+    assert "UPGRADE PROPOSAL" in tune.render(result)
+
+
+def test_no_upgrade_is_offered_when_no_window_left_quota_unused(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    result = tune.build(
+        [window(agents=[("deep-reviewer", 40, 20000000.0)])],
+        opus_config(["deep-reviewer"]),
+        roots=roots_for(home),
+        now=NOW,
+    )
+    assert entry_for(result, "deep-reviewer")["status"] == tune.ALREADY_RIGHT_SIZED
+    assert result["upgrade_proposals"] == []
+
+
+def test_an_upgrade_bigger_than_the_unused_quota_is_not_offered(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    result = tune.build(
+        [headroom_window(unused=1000.0)], opus_config(["deep-reviewer"]), roots=roots_for(home), now=NOW
+    )
+    entry = entry_for(result, "deep-reviewer")
+    assert entry["status"] == tune.ALREADY_RIGHT_SIZED
+    assert "against the 1,000 the analysed windows left unused" in entry["note"]
+
+
+def test_an_agent_that_ran_in_too_few_windows_is_not_offered_an_upgrade(home):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    windows = four_windows([0, 0, 0, 0])
+    windows[-1]["by_agent"] = [{"key": "deep-reviewer", "turns": 40, "weighted": 20000000.0}]
+    windows[-1]["findings_by_rule"] = {"headroom": {"count": 1, "weighted_cost": 400000000.0}}
+    result = tune.build(windows, opus_config(["deep-reviewer"]), roots=roots_for(home), now=NOW)
+    entry = entry_for(result, "deep-reviewer")
+    assert entry["status"] == tune.ALREADY_RIGHT_SIZED
+    assert "1 of 4" in entry["note"]
+
+
+def test_a_cheap_agent_on_neither_list_is_not_assessable(home):
+    agent_file(home / ".claude" / "agents", "stranger", model="sonnet")
+    result = tune.build(
+        [headroom_window(agents=[("stranger", 40, 20000000.0)])],
+        opus_config([]),
+        roots=roots_for(home),
+        now=NOW,
+    )
+    entry = entry_for(result, "stranger")
+    assert entry["status"] == tune.NOT_ASSESSABLE
+    assert entry["weighted_saving"] is None
+    assert "opus_class_agents" in entry["note"]
+
+
+def test_a_cheap_agent_on_the_sonnet_list_stays_right_sized(home):
+    agent_file(home / ".claude" / "agents", "review-verifier", model="sonnet")
+    result = tune.build(
+        [headroom_window(agents=[("review-verifier", 40, 20000000.0)])],
+        opus_config([]),
+        roots=roots_for(home),
+        now=NOW,
+    )
+    assert entry_for(result, "review-verifier")["status"] == tune.ALREADY_RIGHT_SIZED
+
+
 def test_a_builtin_agent_below_the_saving_floor_still_reports_its_cost_with_no_proposal(home):
     windows = four_windows([0, 0, 0, 0])
     for data in windows:
-        data["by_agent"] = [{"key": "general-purpose", "turns": 3, "weighted": 260000.0}]
+        data["by_agent"] = [{"key": "Explore", "turns": 3, "weighted": 260000.0}]
     result = build(windows, home, setting=tune.subagent_model_setting(home))
-    entry = entry_for(result, "general-purpose")
+    entry = entry_for(result, "Explore")
     assert entry["status"] == tune.NO_FILE
     assert entry["typical_weighted"] == 260000.0
     assert entry["weighted_saving"] is None
@@ -419,6 +519,7 @@ def test_a_skill_is_reported_with_its_file_size_and_description_length_and_no_sa
     assert entry["description_chars"] == 300
     assert entry["file_bytes"] > 0
     assert "not the cost of loading it" in entry["note"]
+    assert "broad enough" not in entry["note"]
 
 
 def test_a_cost_per_run_far_above_the_others_is_flagged_without_a_saving(home):
@@ -633,54 +734,66 @@ def test_tune_has_no_flag_that_applies_anything():
     }
 
 
-def test_neither_tune_module_contains_a_file_writing_call():
+def test_no_module_on_the_tune_path_contains_a_file_writing_call():
     src = Path(__file__).resolve().parents[1] / "src"
-    for name in ("tune.py", "rules.py"):
+    for name in ("tune.py", "rules.py", "agentfiles.py", "advice.py"):
         source = (src / name).read_text(encoding="utf-8")
         for forbidden in ("write_text(", "write_bytes(", "os.replace", "shutil.", "unlink(", "mkdir("):
             assert forbidden not in source, "%s in %s" % (forbidden, name)
         assert "open(" not in source.replace("open(path, encoding=", "READ(")
 
 
-def live(tmp_path, monkeypatch, home, extra=None):
+def live(tmp_path, monkeypatch, home, headroom=False):
     monkeypatch.setenv("MY_TOKEN_SPEND_DATA", str(tmp_path / "data-home"))
     monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
     import paths
 
     data_home = tmp_path / "data-home"
     paths.ensure_home(data_home)
-    payload = window(agents=[("mr-scout", 399, 20000000.0)], skills=[("linear-mcp-cli", 187, 15700000.0)])
+    agents = [("mr-scout", 399, 20000000.0)]
+    if headroom:
+        agents.append(("deep-reviewer", 40, 20000000.0))
+    payload = window(agents=agents, skills=[("linear-mcp-cli", 187, 15700000.0)])
+    if headroom:
+        payload["findings_by_rule"] = {"headroom": {"count": 1, "weighted_cost": 400000000.0}}
     (paths.data_dir(data_home) / "week_2026_08_22.json").write_text(json.dumps(payload), encoding="utf-8")
     (paths.data_dir(data_home) / "records" / "week_2026_08_22.jsonl").write_text(
         json.dumps(record("2026-08-22T10:00:00+00:00", agent="mr-scout", agent_id="a1")) + "\n", encoding="utf-8"
     )
     config = json.loads(paths.config_path(data_home).read_text(encoding="utf-8"))
+    if headroom:
+        config["advice"]["opus_class_agents"] = ["deep-reviewer"]
     config["transcript_root"] = str(tmp_path / "transcripts")
     (tmp_path / "transcripts").mkdir(exist_ok=True)
     paths.config_path(data_home).write_text(json.dumps(config), encoding="utf-8")
     fixed = roots_for(home)
-    monkeypatch.setattr(tune, "default_roots", lambda **kwargs: fixed)
+    monkeypatch.setattr(agentfiles, "default_roots", lambda **kwargs: fixed)
     return data_home
 
 
 def test_running_tune_leaves_every_agent_and_skill_file_byte_identical(home, tmp_path, monkeypatch, capsys):
     agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
     skill_file(home / ".claude" / "skills", "linear-mcp-cli")
     (home / ".claude" / "CLAUDE.md").write_text("# rules\n", encoding="utf-8")
-    live(tmp_path, monkeypatch, home)
+    live(tmp_path, monkeypatch, home, headroom=True)
     before = {p: p.read_bytes() for p in sorted((home / ".claude").rglob("*")) if p.is_file()}
     assert cli.main(["tune"]) == 0
     after = {p: p.read_bytes() for p in sorted((home / ".claude").rglob("*")) if p.is_file()}
     assert before == after
-    assert "PROPOSALS" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "PROPOSALS" in out
+    assert "UPGRADE PROPOSAL" in out
 
 
 def test_the_json_form_carries_the_pacing_centres_and_says_it_applies_nothing(home, tmp_path, monkeypatch, capsys):
     agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
-    live(tmp_path, monkeypatch, home)
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    live(tmp_path, monkeypatch, home, headroom=True)
     assert cli.main(["tune", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["applies_changes"] is False
+    assert payload["upgrade_proposals"][0]["name"] == "deep-reviewer"
     assert payload["windows"][0]["key"] == "week_2026_08_22"
     assert payload["pacing"][0]["key"] == "week_2026_08_22"
     assert any(centre["name"] == "mr-scout" for centre in payload["centres"])
@@ -695,7 +808,8 @@ def test_the_cli_flags_override_the_configured_floors(home, tmp_path, monkeypatc
 
 
 def test_tune_writes_nothing_into_the_data_home(home, tmp_path, monkeypatch, capsys):
-    data_home = live(tmp_path, monkeypatch, home)
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    data_home = live(tmp_path, monkeypatch, home, headroom=True)
     before = {p: p.stat().st_mtime_ns for p in sorted(data_home.rglob("*")) if p.is_file()}
     assert cli.main(["tune"]) == 0
     after = {p: p.stat().st_mtime_ns for p in sorted(data_home.rglob("*")) if p.is_file()}

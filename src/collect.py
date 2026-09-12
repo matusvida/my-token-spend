@@ -551,7 +551,9 @@ def field_coverage(records):
     return covered
 
 
-def aggregate_window(start_date, records, config, parse_stats, ceiling, instants=None):
+def aggregate_window(
+    start_date, records, config, parse_stats, ceiling, instants=None, previous_weighted=None, samples=None
+):
     tz = zone(config)
     start_utc, end_utc, boundary_source = window_bounds(start_date, config, instants)
     start_local, end_local = start_utc.astimezone(tz), end_utc.astimezone(tz)
@@ -569,7 +571,16 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling, instants
             totals["sidechain_weighted"] += record["weighted"]
     totals["sessions"] = len({r["sessionId"] for r in records})
 
-    findings = rules.evaluate(records, config)
+    is_current = start_utc <= now < end_utc
+    ceiling_state = ceiling_block(ceiling, totals["weighted"], elapsed_days, now, end_utc, is_current)
+    findings = rules.evaluate(
+        records,
+        config,
+        quota=headroom_context(
+            ceiling_state, window_key(start_date), totals["weighted"], previous_weighted, samples,
+            start_utc, end_utc, now,
+        ),
+    )
     by_rule = {}
     for finding in findings:
         bucket = by_rule.setdefault(finding["rule"], {"count": 0, "weighted_cost": 0.0})
@@ -589,7 +600,7 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling, instants
             "boundary_source": boundary_source,
             "reset_weekday": config["reset_weekday"],
             "reset_hour": config["reset_hour"],
-            "is_current": start_utc <= now < end_utc,
+            "is_current": is_current,
             "elapsed_days": round(elapsed_days, 4),
             "elapsed_fraction": round(elapsed_seconds / window_seconds, 4) if window_seconds else 0.0,
         },
@@ -614,10 +625,26 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling, instants
         "context": context.window_block(records, config),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
-        "ceiling": ceiling_block(
-            ceiling, totals["weighted"], elapsed_days, now, end_utc, start_utc <= now < end_utc
-        ),
+        "ceiling": ceiling_state,
         "parse": dict(parse_stats, records=len(records)),
+    }
+
+
+def headroom_context(block, key, weighted, previous_weighted, samples, start_utc, end_utc, now):
+    estimate = block.get("estimate")
+    return {
+        "window_key": key,
+        "method": block.get("method"),
+        "closed": now >= end_utc,
+        "ceiling": estimate,
+        "spent": weighted,
+        "percent_used": block.get("percent_used"),
+        "previous_percent_used": (
+            round(100.0 * previous_weighted / estimate, 4)
+            if estimate and previous_weighted is not None
+            else None
+        ),
+        "extra_usage": quota.extra_usage_unused(samples or [], start_utc, end_utc),
     }
 
 
@@ -813,17 +840,26 @@ def _finalize(stores, config, store_dir, data_dir, reports_dir, parse_stats, win
         if records:
             _write_store(store_dir / (window_key(date.fromisoformat(start)) + ".jsonl"), records)
 
-    ceiling = estimate_ceiling(
-        {start: sum(r["weighted"] for r in records) for start, records in windows.items()},
-        config,
-        samples=samples,
-        instants=instants,
-    )
+    weighted_by_start = {start: sum(r["weighted"] for r in records) for start, records in windows.items()}
+    ceiling = estimate_ceiling(weighted_by_start, config, samples=samples, instants=instants)
+    ordered = sorted(weighted_by_start)
+    previous_weighted = {
+        start: weighted_by_start[ordered[index - 1]] for index, start in enumerate(ordered) if index
+    }
     written = []
     for start, records in windows.items():
         if (window and start != window) or not records:
             continue
-        aggregate = aggregate_window(date.fromisoformat(start), records, config, parse_stats, ceiling, instants)
+        aggregate = aggregate_window(
+            date.fromisoformat(start),
+            records,
+            config,
+            parse_stats,
+            ceiling,
+            instants,
+            previous_weighted=previous_weighted.get(start),
+            samples=samples,
+        )
         key = aggregate["window"]["key"]
         _write_json(data_dir / (key + ".json"), aggregate)
         (reports_dir / (key + ".md")).write_text(render_markdown(aggregate), encoding="utf-8")

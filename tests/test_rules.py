@@ -19,6 +19,7 @@ def rec(
     output=0,
     cache_create=0,
     cache_read=0,
+    thinking=0,
     sidechain=False,
     agent=None,
     tools=(),
@@ -49,7 +50,7 @@ def rec(
         "output": output,
         "cache_create": cache_create,
         "cache_read": cache_read,
-        "thinking": 0,
+        "thinking": thinking,
         "weighted": weighted,
         "tools": [{"name": n, "hash": h} for n, h in tools],
         "text_chars": 0,
@@ -200,6 +201,40 @@ def test_model_mismatch_fires_on_trivial_opus_turns():
     findings = find(rules.evaluate(records, CONFIG), "model_mismatch")
     assert len(findings) == 1
     assert findings[0]["evidence"]["turns"] == 60
+
+
+def test_model_mismatch_ignores_a_turn_whose_only_call_dispatched_an_agent():
+    records = [
+        rec(at(i), model="claude-opus-5", output=10, cache_read=300000, tools=[("Agent", "h")])
+        for i in range(60)
+    ]
+    assert find(rules.evaluate(records, CONFIG), "model_mismatch") == []
+
+
+def test_model_mismatch_ignores_a_turn_that_thought_past_the_cap():
+    cap = CONFIG["thresholds"]["model_mismatch"]["max_thinking"]
+    records = [
+        rec(
+            at(i),
+            model="claude-opus-5",
+            output=10,
+            thinking=cap + 1,
+            cache_read=300000,
+            tools=[("Read", "h")],
+        )
+        for i in range(60)
+    ]
+    assert find(rules.evaluate(records, CONFIG), "model_mismatch") == []
+
+
+def test_model_mismatch_detail_states_every_condition_it_applied():
+    records = [
+        rec(at(i), model="claude-opus-5", output=10, cache_read=300000, tools=[("Read", "h")])
+        for i in range(60)
+    ]
+    detail = find(rules.evaluate(records, CONFIG), "model_mismatch")[0]["detail"]
+    for fragment in ("250 output tokens", "1 tool call", "200 thinking tokens", "Agent"):
+        assert fragment in detail
 
 
 def test_model_mismatch_cost_is_the_gap_to_the_downgrade_model():
