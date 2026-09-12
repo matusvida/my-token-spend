@@ -281,3 +281,11 @@ def test_the_burn_reference_line_is_named_by_the_ceiling_method():
     estimated = rendered(window, records, calls)
     assert "estimated ceiling 2.5B" in estimated
     assert ">quota 2.5B<" not in estimated
+
+
+def test_the_effort_ranking_states_what_its_share_is_measured_on():
+    window, records, calls = real_shaped()
+    html = rendered(window, records, calls)
+    block = html.split("<h3>Effort tiers</h3>")[1].split("<h3>")[0]
+    assert "recorded on 100% of turns." in block
+    assert window["field_coverage"]["effort"]["share"] == 1.0

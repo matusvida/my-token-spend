@@ -832,6 +832,13 @@ def _breakdown(title, note, rows, total, key_label="key"):
     )
 
 
+def _recorded_on(window, field):
+    block = (window.get("field_coverage") or {}).get(field)
+    if not block:
+        return ""
+    return "recorded on %.0f%% of turns." % (100.0 * block["share"])
+
+
 def _rows_from(entries, limit=8, label_key="key"):
     ordered = sorted(entries, key=lambda entry: -entry["weighted"])[:limit]
     return [
@@ -863,7 +870,7 @@ def _composition_section(window):
             _breakdown("Subagent types", "Subagent turns only; turns with no attribution are pooled.", agents, total, "agent type"),
             _breakdown("Repos", "By the working directory recorded on each turn.", repos, total, "repo"),
             _breakdown("Models", "", _rows_from(window["by_model"]), total, "model"),
-            _breakdown("Effort tiers", "", _rows_from(window["by_effort"]), total, "effort"),
+            _breakdown("Effort tiers", _recorded_on(window, "effort"), _rows_from(window["by_effort"]), total, "effort"),
             _breakdown("Skills", "", _rows_from(window["by_skill"], limit=6), total, "skill"),
         )
     )

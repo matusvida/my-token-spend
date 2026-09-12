@@ -530,6 +530,7 @@ def _day_breakdown(records, tz):
 
 
 COVERAGE_FIELDS = (
+    "effort",
     "mcp_server",
     "mcp_tool",
     "plugin",
