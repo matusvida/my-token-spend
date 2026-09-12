@@ -259,7 +259,7 @@ same file.
 Interface: `collect.run(...)` and `collect.recut(...)`, reached from the CLI as
 `collect [--backfill] [--recut-windows] [--reprice] [--rebuild-from-transcripts-only]
 [--window YYYY-MM-DD]`.
-Depends on `config.json`, `state.json`, `rules.py`.
+Depends on `config.json`, `state.json`, `rules.py`, `context.py`.
 
 Window boundaries are evaluated in the zone named by `config.timezone`. A `null` value — the shipped
 default — means the machine's own zone, resolved through a `tzinfo` derived from the platform so
@@ -274,17 +274,53 @@ never speculates; a rule either fires with a number or does not fire.
 
 | Rule | Detects | Cost attributed |
 |---|---|---|
-| Context bloat tax | `cache_read` climbing monotonically across a session — a long session never cleared | Tokens paid re-reading context above the configured threshold |
+| Context bloat tax | `cache_read` climbing monotonically across a session — a long session never cleared. The finding text names what grew the context, from `context.py` | Tokens paid re-reading context above the configured threshold |
 | Subagent storm | Sidechain turn count and cost share per parent session | Total sidechain weighted cost for that session |
 | Agent-type skew | Weighted cost grouped by `attributionAgent` | Cost per agent type, ranked |
 | Model mismatch | Opus/Fable turns with one trivial tool call and short output | Difference between actual cost and the same turn priced at sonnet |
-| Redundant reads | Identical tool input hash re-read repeatedly within a session | Cost of the repeat occurrences |
-| Loop / retry burn | Repeated near-identical tool calls, failed-then-retried sequences | Cost of the redundant attempts |
+| Redundant reads | Identical tool input hash re-read repeatedly within a session | Cost of the repeat occurrences, each call charged its share of the turn by `result_chars` |
+| Loop / retry burn | Repeated near-identical tool calls, failed-then-retried sequences | Cost of the redundant attempts, charged the same way |
 | Whale turns | Top N single messages by weighted cost | The turn's own cost, labelled with the triggering user prompt |
+
+A turn's cost is split across its tool calls in proportion to `result_chars`, so
+a repeated 400 KB read carries its own weight and a repeated `ls` does not. When
+any call on the turn has no recorded result size, or every result was empty, the
+split falls back to an even one.
 
 Interface: `rules.evaluate(records, config) -> list[Finding]`. Depends on nothing
 but `config.json` thresholds — no I/O, so each rule is unit-testable against
 synthetic record lists.
+
+### `context.py` — what grew the context
+
+Pure functions over a window's records, no I/O. Context growth at a turn is
+`(cache_read + cache_create)` minus the same sum on the previous turn of the
+**same thread**, floored at zero. A thread is `(sessionId, agentId)`: subagent
+turns carry the parent's `sessionId`, so interleaving them by timestamp would
+read every return to the parent as fresh growth. Growth resets to zero on a turn
+marked `after_compaction` or `compacted`, and turns with no usage at all — API
+errors — are skipped rather than treated as a reset, so the next real turn is
+measured against the last real one.
+
+Growth at a turn is attributed to the *previous* turn's tool results in
+proportion to their `result_chars`. A previous turn with no tool calls sends the
+whole growth to `prompt`; a previous turn whose calls do not all carry a
+`result_chars`, or whose results were all empty, sends it to `unattributed`. The
+prompt bucket is all-or-nothing: the stored `prompt` is the session's last user
+prompt clipped to `prompt_label_chars`, so there is no per-turn prompt length to
+divide by.
+
+Per session it reports growth by tool name, the ten largest single results with
+their tool and timestamp, the number of compactions, the carry tax (the weighted
+`cache_read` above the threshold), and the share of tool calls that carry a
+`result_chars` at all. Old records carry none, so every
+sentence built from this data states that coverage.
+
+Interface: `context.summarize_session(session, config)`,
+`context.window_block(records, config)` for the window JSON, and
+`context.detail(summary, threshold, config)` for the `context_bloat` finding
+text. The text names the tool and the size of a result, never its input: tool
+input text is not stored.
 
 ### `rootcause.py` — what the work behind a finding was
 
@@ -456,7 +492,7 @@ my-token-spend/
   bin/my-token-spend  bin/my-token-spend.ps1
   commands/my-token-spend.md
   skills/my-token-spend/SKILL.md
-  src/  cli.py collect.py rules.py rootcause.py advice.py report.py tune.py
+  src/  cli.py collect.py rules.py context.py rootcause.py advice.py report.py tune.py
         paths.py
         config.default.json
   docs/design.md  README.md
@@ -589,6 +625,21 @@ by_session       [{key, turns, weighted, tokens..., sidechain_turns,
                    sidechain_weighted, models[], agents[], first_ts, last_ts,
                    cwd, gitBranch, first_prompt}]
                  cwd/gitBranch are the session's last observed values
+
+context          context.window_block output: the context-growth breakdown the
+                 report renders
+                 {threshold, coverage{present, total, share}, statement,
+                  sessions[{session, turns, growth_total, growth_by_tool[],
+                   prompt_growth, unattributed_growth, attributed_share,
+                   top_results[{tool, chars, ts, growth}], compactions,
+                   carry_tax, excess_tokens, peak_cache_read, first_ts, last_ts,
+                   cwd, tool_results_coverage, largest_by_tool{},
+                   compaction_ts[], series[[ts, context, growth, tool]]}]}
+                 series is binned down to 300 points - each bin sums its growth,
+                 so the bars still add up to growth_total - and compaction_ts
+                 carries the markers so they survive the binning
+                 only sessions that carry a context_bloat finding, the ten
+                 heaviest by carry tax
 
 findings         rules.evaluate output, ranked by weighted_cost desc
                  [{rule, subject, detail, weighted_cost, evidence{...}}]
@@ -951,7 +1002,7 @@ my-token-spend/
   .claude-plugin/plugin.json
   commands/my-token-spend.md
   skills/my-token-spend/SKILL.md
-  src/  collect.py rules.py rootcause.py advice.py report.py tune.py cli.py
+  src/  collect.py rules.py context.py rootcause.py advice.py report.py tune.py cli.py
   tests/
   README.md
 ```

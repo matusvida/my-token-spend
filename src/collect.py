@@ -9,6 +9,7 @@ from datetime import time as time_of_day
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import context
 import rules
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -576,6 +577,7 @@ def aggregate_window(start_date, records, config, parse_stats, ceiling):
         "by_session": _session_breakdown(records),
         "unknown_models": _breakdown(unpriced_records(records, config), lambda r: r["model"]),
         "field_coverage": field_coverage(records),
+        "context": context.window_block(records, config),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
         "ceiling": ceiling_block(ceiling, totals["weighted"], elapsed_days, now, end_local),
