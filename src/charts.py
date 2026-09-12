@@ -573,47 +573,38 @@ def svg_scatter(chart, height=320):
     if not points:
         return ""
     colors = color_map(chart["models"])
-    max_tools = max([point["tools"] for point in points] + [chart["box"]["tools"] + 1])
-    ticks = nice_ticks(max(chart.get("axis_max") or 0, chart["box"]["output"]))
-    top_tick = ticks[-1]
-    busiest = max([point["thinking"] for point in points] + [1])
-    band = width / max(1, max_tools)
+    box = chart["box"]
+    y_ticks = nice_ticks(max(chart.get("thinking_max") or 0, box["thinking"], 1))
+    top_tick = y_ticks[-1]
+    x_ticks = nice_ticks(max(chart.get("axis_max") or 0, box["output"], 1))
+    right_tick = x_ticks[-1]
 
-    def x_at(value, index=0):
-        jitter = ((index * 37) % 11 - 5) / 5.0 * band * 0.28
-        return left + (value - 0.5) * band + band / 2 + jitter
+    def x_at(value):
+        return left + (min(value, right_tick) / right_tick * width if right_tick else 0.0)
 
     def y_at(value):
-        return top + plot_height - (value / top_tick * plot_height if top_tick else 0.0)
+        return top + plot_height - (min(value, top_tick) / top_tick * plot_height if top_tick else 0.0)
 
-    parts = [_grid_and_ticks(ticks, top_tick, left, top, plot_height)]
-    box_right = x_at(chart["box"]["tools"] + 0.5)
-    box_top = y_at(chart["box"]["output"])
+    parts = [_grid_and_ticks(y_ticks, top_tick, left, top, plot_height)]
     parts.append(
         '<rect class="region" x="%.2f" y="%.2f" width="%.2f" height="%.2f" data-tip="%s"/>'
         % (
             left,
-            box_top,
-            max(2.0, box_right - left),
-            max(2.0, top + plot_height - box_top),
+            y_at(box["thinking"]),
+            max(2.0, x_at(box["output"]) - left),
+            max(2.0, top + plot_height - y_at(box["thinking"])),
             esc(
-                "counted here: at most %d output tokens and %d tool call"
-                % (chart["box"]["output"], chart["box"]["tools"])
+                "counted here: at most %d output tokens, %d thinking tokens and %d tool call"
+                % (box["output"], box["thinking"], box["tools"])
             ),
         )
     )
-    parts.append(
-        '<text class="region-label" x="%.2f" y="%.2f">at most %d output, %d tool call</text>'
-        % (box_right + 8, box_top + 14, chart["box"]["output"], chart["box"]["tools"])
-    )
-    for index, point in enumerate(points):
-        radius = 3.0 + 5.0 * (point["thinking"] / busiest if busiest else 0.0)
+    for point in points:
         parts.append(
-            '<circle class="dot" cx="%.2f" cy="%.2f" r="%.2f" fill="var(%s)" data-tip="%s"/>'
+            '<circle class="dot" cx="%.2f" cy="%.2f" r="4" fill="var(%s)" data-tip="%s"/>'
             % (
-                x_at(point["tools"], index),
-                y_at(min(point["output"], top_tick)),
-                radius,
+                x_at(point["output"]),
+                y_at(point["thinking"]),
                 colors.get(point["model"], OTHER),
                 esc(
                     "%s\n%d tool call(s), %s output tokens, %s thinking"
@@ -625,16 +616,18 @@ def svg_scatter(chart, height=320):
         '<line class="baseline" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f"/>'
         % (left, top + plot_height, PLOT_WIDTH - MARGIN["right"], top + plot_height)
     )
-    for value in range(1, max_tools + 1):
-        if max_tools > 12 and value % 2 == 0:
-            continue
+    for tick in x_ticks:
         parts.append(
-            '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="middle">%d</text>'
-            % (x_at(value), top + plot_height + 22, value)
+            '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="middle">%s</text>'
+            % (x_at(tick), top + plot_height + 22, esc(compact(tick)))
         )
     parts.append(
-        '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="middle">tool calls on the turn</text>'
+        '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="middle">output tokens, thinking up the side</text>'
         % (left + width / 2, top + plot_height + 44)
+    )
+    parts.append(
+        '<text class="region-label" x="%.2f" y="%.2f" text-anchor="end">counted: %d output, %d thinking, %d tool call</text>'
+        % (PLOT_WIDTH - MARGIN["right"], top + 12, box["output"], box["thinking"], box["tools"])
     )
     return _svg(height, "".join(parts))
 

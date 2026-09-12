@@ -120,11 +120,15 @@ def _mismatch_chart(records, config):
     expensive = sorted(ranked, key=lambda model: (-weight[model], model))[:3]
     outputs = sorted(record["output"] for record in sampled)
     axis_max = max(outputs[int(0.95 * (len(outputs) - 1))], 4 * settings["max_output_tokens"])
+    thinking_values = sorted((record.get("thinking") or 0) for record in sampled)
+    thinking_max = max(
+        thinking_values[int(0.95 * (len(thinking_values) - 1))], 4 * settings["max_thinking"]
+    )
     points = [
         {
             "tools": len(record["tools"]),
             "output": record["output"],
-            "thinking": record.get("thinking") or 0,
+            "thinking": min(record.get("thinking") or 0, thinking_max),
             "model": record["model"] if record["model"] in expensive else "other models",
         }
         for record in sampled
@@ -134,8 +138,13 @@ def _mismatch_chart(records, config):
         "kind": "scatter",
         "points": points,
         "models": expensive + (["other models"] if len(ranked) > len(expensive) else []),
-        "box": {"output": settings["max_output_tokens"], "tools": settings["max_tool_calls"]},
+        "box": {
+            "output": settings["max_output_tokens"],
+            "tools": settings["max_tool_calls"],
+            "thinking": settings["max_thinking"],
+        },
         "axis_max": axis_max,
+        "thinking_max": thinking_max,
         "above_axis": len(sampled) - len(points),
         "plotted": len(points),
         "total": len(turns),

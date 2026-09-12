@@ -1407,3 +1407,29 @@ def test_a_timeline_whose_runs_are_all_named_shows_no_derived_swatch():
     both = report._timeline_chart_html(chart)
     assert "label derived from tools" in both
     assert "named by the orchestrator" in both
+
+
+def test_the_mismatch_strip_plots_output_against_thinking_with_the_rule_box_in_the_corner():
+    import charts
+
+    chart = {
+        "kind": "scatter",
+        "points": [
+            {"tools": 1, "output": 120, "thinking": 40, "model": "claude-opus-5"},
+            {"tools": 1, "output": 900, "thinking": 700, "model": "claude-sonnet-5"},
+        ],
+        "models": ["claude-opus-5", "claude-sonnet-5"],
+        "box": {"output": 250, "tools": 1, "thinking": 200},
+        "axis_max": 1000,
+        "thinking_max": 800,
+        "above_axis": 0,
+        "plotted": 2,
+        "total": 2,
+    }
+    svg = charts.svg_scatter(chart)
+    assert "counted: 250 output, 200 thinking, 1 tool call" in svg
+    assert "output tokens, thinking up the side" in svg
+    assert "tool calls on the turn" not in svg
+    assert svg.count('class="dot"') == 2
+    corner = svg.index("counted: 250 output")
+    assert 'text-anchor="end"' in svg[corner - 80 : corner]

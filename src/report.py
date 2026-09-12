@@ -1457,7 +1457,7 @@ def _timeline_chart_html(chart):
 
 
 def _scatter_chart_html(chart):
-    note = "%s of %s tool-calling turns; x jittered, dot size by thinking." % (
+    note = "%s of %s tool-calling turns; one dot per turn, no jitter." % (
         exact(chart["plotted"]),
         exact(chart["total"]),
     )
