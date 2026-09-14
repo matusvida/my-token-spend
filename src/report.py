@@ -725,7 +725,7 @@ def compact_basis(basis):
 COVERAGE_WORDS = {
     "attributionSkill": "skill attribution",
     "attributionAgent": "agent attribution",
-    "mcp_server": "MCP server names",
+    "mcp_server": "MCP servers",
     "mcp_tool": "MCP tool names",
     "tools": "tool calls",
     "tool result status": "tool result status",
@@ -741,6 +741,8 @@ def coverage_words(field):
 
 
 def _coverage_note(coverage):
+    if coverage["share"] >= 1.0:
+        return ""
     return "%s recorded on %.0f%% of turns." % (coverage_words(coverage["field"]), 100.0 * coverage["share"])
 
 
@@ -764,8 +766,7 @@ def _anomaly_card(item, anchors=()):
         '<span class="finding-rule">%s</span><span class="finding-subject">%s</span>'
         '<span class="finding-cost">%s</span></div>'
         '<div class="finding-detail">%s.</div>%s'
-        '<div class="finding-threshold">%s</div>'
-        '<p class="chart-note">%s</p></div>'
+        '<div class="finding-threshold">%s</div>%s</div>'
         % (
             esc(item["key"]),
             esc(ANOMALY_LABELS.get(item["key"], item["key"].replace("_", " "))),
@@ -774,7 +775,8 @@ def _anomaly_card(item, anchors=()):
             esc(_sentence_case(item["claim"])),
             _anomaly_chart(item["chart"]),
             _anomaly_action(item, anchors),
-            esc(_coverage_note(item["coverage"])),
+            ('<p class="chart-note">%s</p>' % esc(_coverage_note(item["coverage"])))
+            if _coverage_note(item["coverage"]) else "",
         )
     )
 
@@ -1317,7 +1319,7 @@ def _tile(label, value, note, warn=False):
 def unattributed_note(unattributed, sidechain):
     note = "of %s weighted on subagents" % compact(sidechain)
     if sidechain and unattributed / sidechain > UNATTRIBUTED_WARN_SHARE:
-        return "%s, dispatched with no agent type recorded" % note
+        return "%s, dispatched with no agent type" % note
     return note
 
 
@@ -1374,7 +1376,7 @@ def _third_tile(window, cost_block):
         return _tile(
             "Unused quota",
             compact(unused),
-            "left under the %s ceiling on the tile beside this one" % compact(estimate),
+            "unspent against this window's ceiling",
         )
     totals = window["totals"]
     return _tile(
@@ -2546,7 +2548,7 @@ def render_html(
         ("Rule lenses", _findings_section(target)),
         ("What the big cost centres did", _drilldown_section(analysis, store)),
         ("Tool round trips", _round_trip_block(evidence_block.get("round_trip_chart")), evidence.ROUND_TRIPS),
-        ("List price coverage", price_coverage_block(target)),
+        ("List price", price_coverage_block(target)),
     ]
     anchors = {card["id"] for card in evidence_block.get("cards") or []}
     if evidence_block.get("round_trip_chart"):

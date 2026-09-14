@@ -73,4 +73,15 @@ def test_every_coverage_footer_reads_as_plain_words():
 def test_the_unattributed_tile_note_names_no_field():
     note = report.unattributed_note(900.0, 1000.0)
     assert "subagent_type" not in note
-    assert "no agent type recorded" in note
+    assert "no agent type" in note
+
+
+def test_a_footer_saying_full_coverage_is_not_printed_at_all():
+    assert report._coverage_note({"field": "attributionSkill", "share": 1.0}) == ""
+    card = report._anomaly_card(
+        dict(
+            anomaly(key="mcp_server_share", subject="claude.ai Linear"),
+            coverage={"field": "mcp_server", "present": 10, "total": 10, "share": 1.0},
+        )
+    )
+    assert "chart-note" not in card

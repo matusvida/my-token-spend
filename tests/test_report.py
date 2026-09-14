@@ -2315,7 +2315,7 @@ def test_a_mostly_unnamed_subagent_lane_warns_on_its_tile():
     html = report.render_html([window], window)
     verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
     assert '<div class="tile warn">' in verdict
-    assert "dispatched with no agent type recorded" in verdict
+    assert "dispatched with no agent type" in verdict
 
 
 def test_a_mostly_named_subagent_lane_does_not_warn():
