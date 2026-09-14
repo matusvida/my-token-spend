@@ -375,8 +375,12 @@ def read_file(path, config, stored):
 QUOTA_FIT_DEFAULTS = {"min_pct": 10, "min_samples": 3, "windows": 3, "fresh_hours": 6}
 
 
+def quota_fit_settings(config):
+    return dict(QUOTA_FIT_DEFAULTS, **(config["ceiling"].get("quota_fit") or {}))
+
+
 def quota_fit(samples, config, instants=None, now=None):
-    settings = dict(QUOTA_FIT_DEFAULTS, **(config["ceiling"].get("quota_fit") or {}))
+    settings = quota_fit_settings(config)
     now = now or datetime.now(timezone.utc)
     instants = quota.reset_instants(samples) if instants is None else instants
     current = window_start(now, config, instants)
