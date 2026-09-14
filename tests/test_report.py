@@ -1765,6 +1765,52 @@ def test_the_context_axis_is_labelled_by_turn_order():
     assert "x is turn order, not a clock" in html
 
 
+def test_the_context_axis_names_the_real_turn_behind_a_binned_point():
+    import charts
+
+    chart = {
+        "kind": "context_series",
+        "series": [
+            ["2026-09-07T09:16:00+00:00", 100000, 10, "Bash"],
+            ["2026-09-09T10:24:00+00:00", 150000, 20, "Bash"],
+            ["2026-09-11T16:53:00+00:00", 200000, 30, "Bash"],
+        ],
+        "series_points": 5233,
+        "threshold": 150000,
+        "compactions": [],
+        "by_tool": [{"tool": "Bash", "tokens": 60, "results": 3}],
+        "top_results": [],
+        "coverage": {},
+    }
+    svg = charts.svg_context_series(chart)
+    assert "turn 1 (09/07 09:16)" in svg
+    assert "turn 2,617 (09/09 10:24)" in svg
+    assert "turn 5,233 (09/11 16:53)" in svg
+    assert "turn 3 (" not in svg
+
+
+def test_the_context_axis_drops_the_date_inside_one_day():
+    import charts
+
+    chart = {
+        "kind": "context_series",
+        "series": [
+            ["2026-09-07T09:16:00+00:00", 100000, 10, "Bash"],
+            ["2026-09-07T16:53:00+00:00", 200000, 30, "Bash"],
+        ],
+        "series_points": 400,
+        "threshold": 150000,
+        "compactions": [],
+        "by_tool": [{"tool": "Bash", "tokens": 60, "results": 3}],
+        "top_results": [],
+        "coverage": {},
+    }
+    svg = charts.svg_context_series(chart)
+    assert "turn 1 (09:16)" in svg
+    assert "turn 400 (16:53)" in svg
+    assert "09/07" not in svg
+
+
 def test_a_timeline_whose_median_run_is_a_sliver_falls_back_to_runs_by_turns():
     import charts
 

@@ -458,6 +458,17 @@ def _clock(value):
     return str(value or "")[11:16]
 
 
+def _stamp(value, dated=False):
+    text = str(value or "")
+    return (text[5:10].replace("-", "/") + " " + text[11:16]).strip() if dated else text[11:16]
+
+
+def _turn_of(position, drawn, points):
+    if drawn <= 1 or points <= drawn:
+        return position + 1
+    return int(round(position * (points - 1) / float(drawn - 1))) + 1
+
+
 def _svg(height, body):
     return '<svg viewBox="0 0 %d %d" class="chart" role="img">%s</svg>' % (PLOT_WIDTH, height, body)
 
@@ -541,6 +552,8 @@ def svg_context_series(chart, height=280):
         % (left, top + plot_height, PLOT_WIDTH - MARGIN["right"], top + plot_height)
     )
     last = len(series) - 1
+    points = chart.get("series_points") or len(series)
+    dated = len({str(point[0])[:10] for point in series}) > 1
     for position, anchor in ((0, "start"), (last // 2, "middle"), (last, "end")):
         parts.append(
             '<text class="axis-label" x="%.2f" y="%.2f" text-anchor="%s">%s</text>'
@@ -548,7 +561,13 @@ def svg_context_series(chart, height=280):
                 left + band * position + bar_width / 2,
                 top + plot_height + 22,
                 anchor,
-                esc("turn %d (%s)" % (position + 1, _clock(series[position][0]))),
+                esc(
+                    "turn %s (%s)"
+                    % (
+                        "{:,}".format(_turn_of(position, len(series), points)),
+                        _stamp(series[position][0], dated),
+                    )
+                ),
             )
         )
     return _svg(height, "".join(parts))
