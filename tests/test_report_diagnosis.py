@@ -198,10 +198,12 @@ def test_the_word_cap_is_eleven_hundred():
     assert report.WORD_CAP == 1100
 
 
-def advised(kind, title, saving, percent_of_window):
+def advised(kind, title, saving, percent_of_window, subject=None):
     item = recommendation(kind=kind, saving=saving)
     item["title"] = title
     item["percent_of_window"] = percent_of_window
+    if subject is not None:
+        item["subject"] = subject
     return item
 
 
@@ -340,3 +342,34 @@ def test_the_failing_tool_action_drops_the_pointer_when_no_table_is_rendered():
     lane = html.split("What looks wrong")[1].split("</section>")[0]
     assert "round trips table" not in lane
     assert "Read the failing Bash calls and fix the call site." in lane
+
+
+def test_two_recommendations_of_one_kind_are_compared_subject_by_subject():
+    previous_items = [
+        advised("model_downgrade", "Run opus-5 turns on sonnet", 1000.0, 11.5, subject="claude-opus-5"),
+        advised("model_downgrade", "Run fable-5-1 turns on sonnet", 100.0, 0.3, subject="claude-fable-5-1"),
+    ]
+    current = [
+        advised("model_downgrade", "Run opus-5 turns on sonnet", 2000.0, 16.7, subject="claude-opus-5"),
+    ]
+    rows = {row["title"]: row for row in report.advice_movement(previous_items, current)}
+    assert rows["Run opus-5 turns on sonnet"]["now"] == 16.7
+    assert abs(rows["Run opus-5 turns on sonnet"]["movement"] - 5.2) < 1e-9
+    assert rows["Run fable-5-1 turns on sonnet"]["now"] == 0.0
+    assert abs(rows["Run fable-5-1 turns on sonnet"]["movement"] + 0.3) < 1e-9
+
+
+def test_a_recommendation_of_a_kind_seen_before_on_another_subject_is_new():
+    previous_items = [advised("model_downgrade", "Run opus-5 turns on sonnet", 1000.0, 11.5, subject="claude-opus-5")]
+    current = [advised("model_downgrade", "Run fable turns on sonnet", 900.0, 9.0, subject="claude-fable-5-1")]
+    assert [item["subject"] for item in report.new_recommendations(previous_items, current)] == [
+        "claude-fable-5-1"
+    ]
+
+
+def test_one_piece_of_advice_is_tracked_across_windows_by_its_own_title():
+    previous_items = [advised("reset_context", "Clear the context", 1000.0, 7.2, subject="session-aaa")]
+    current = [advised("reset_context", "Clear the context", 3000.0, 15.1, subject="session-bbb")]
+    rows = report.advice_movement(previous_items, current)
+    assert rows[0]["now"] == 15.1
+    assert abs(rows[0]["movement"] - 7.9) < 1e-9

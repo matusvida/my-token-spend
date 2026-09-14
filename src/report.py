@@ -1503,21 +1503,26 @@ NEW_CARDS = 2
 ADVICE_ROWS = 3
 
 
-def _by_kind(items):
-    return {item["kind"]: item for item in items or []}
+def advice_key(item):
+    return (item["kind"], item["title"])
+
+
+def _by_key(items):
+    return {advice_key(item): item for item in items or []}
 
 
 def advice_movement(previous_items, current_items):
-    current = _by_kind(current_items)
+    current = _by_key(current_items)
     rows = []
     for item in previous_items or []:
-        now = current.get(item["kind"])
+        now = current.get(advice_key(item))
         then_share = item["percent_of_window"]
         now_share = now["percent_of_window"] if now else 0.0
         movement = now_share - then_share
         rows.append(
             {
                 "kind": item["kind"],
+                "key": advice_key(item),
                 "title": item["title"],
                 "then": then_share,
                 "now": now_share,
@@ -1532,10 +1537,10 @@ def advice_movement(previous_items, current_items):
 
 
 def new_recommendations(previous_items, current_items):
-    previous = _by_kind(previous_items)
+    previous = _by_key(previous_items)
     fresh = []
     for item in current_items or []:
-        earlier = previous.get(item["kind"])
+        earlier = previous.get(advice_key(item))
         if earlier is None or item["percent_of_window"] - earlier["percent_of_window"] > GROWN_POINTS:
             fresh.append(item)
     fresh.sort(key=lambda item: -item["percent_of_window"])
