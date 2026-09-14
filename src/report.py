@@ -714,8 +714,26 @@ def compact_basis(basis):
     return basis.split(",")[0]
 
 
+COVERAGE_WORDS = {
+    "attributionSkill": "skill attribution",
+    "attributionAgent": "agent attribution",
+    "mcp_server": "MCP server names",
+    "mcp_tool": "MCP tool names",
+    "tools": "tool calls",
+    "tool result status": "tool result status",
+    "tool result sizes": "tool result sizes",
+}
+
+
+def coverage_words(field):
+    known = COVERAGE_WORDS.get(field)
+    if known:
+        return known
+    return str(field or "this detail").replace("_", " ")
+
+
 def _coverage_note(coverage):
-    return "%s on %.0f%% of turns." % (coverage["field"], 100.0 * coverage["share"])
+    return "%s recorded on %.0f%% of turns." % (coverage_words(coverage["field"]), 100.0 * coverage["share"])
 
 
 ANOMALY_ANCHOR_TEXT = {evidence.ROUND_TRIPS: "round trips table"}
@@ -1291,7 +1309,7 @@ def _tile(label, value, note, warn=False):
 def unattributed_note(unattributed, sidechain):
     note = "of %s weighted on subagents" % compact(sidechain)
     if sidechain and unattributed / sidechain > UNATTRIBUTED_WARN_SHARE:
-        return "%s, dispatched with no subagent_type" % note
+        return "%s, dispatched with no agent type recorded" % note
     return note
 
 
