@@ -1964,7 +1964,13 @@ def _raw_section(parts):
     )
 
 
-NARRATIVE_WORDS = 120
+NARRATIVE_WORDS = 90
+
+NARRATIVE_SENTENCES = 3
+
+NARRATIVE_MAX_SENTENCES = 4
+
+NARRATIVE_RETRY_SENTENCES = 2
 
 
 def _clip_words(text, limit):
@@ -1972,13 +1978,24 @@ def _clip_words(text, limit):
     return text if len(words) <= limit else " ".join(words[:limit]) + "..."
 
 
+def count_sentences(text):
+    return len([part for part in re.split(r"[.!?]+(?:\s|$)", text.strip()) if part.strip()])
+
+
+def over_narrative_cap(text):
+    return count_sentences(text) > NARRATIVE_MAX_SENTENCES or len(text.split()) > NARRATIVE_WORDS
+
+
+def narrative_off_note(note):
+    if note and "not on PATH" in note:
+        return "narrative off: claude not on PATH for the scheduled run"
+    return "narrative off: %s" % (note or "none written for this run")
+
+
 def _narrative_section(narrative):
     narrative = _clip_words(narrative, NARRATIVE_WORDS) if narrative else narrative
     if not narrative:
-        return (
-            '<p class="sub narrative-missing" data-narrative="">No narrative: writing one needs the '
-            "<code>claude</code> CLI on PATH.</p>"
-        )
+        return ""
     blocks = []
     bullets = []
     for line in narrative.strip().splitlines():
@@ -2120,14 +2137,18 @@ def rebuild_stale(
                 file=sys.stderr,
             )
         narrative = stamp["narrative"] if stamp else None
+        note = None
         recommendations = advice.recommend(window, window["findings"], config)
         analysis, store = analysis_for(window, config, data_dir)
         if refresh_narrative:
             fresh, error = narrative_for(windows, window, config, recommendations, analysis)
             if error:
+                note = error
                 print("narrative skipped for %s: %s" % (window["window"]["key"], error), file=sys.stderr)
             narrative = fresh or narrative
-        write_report(windows, window, narrative, report_dir, recommendations, analysis, store, config)
+        write_report(
+            windows, window, narrative, report_dir, recommendations, analysis, store, config, narrative_note=note
+        )
         rebuilt.append(
             {
                 "key": window["window"]["key"],
@@ -2139,7 +2160,16 @@ def rebuild_stale(
     return rebuilt
 
 
-def render_html(windows, target, narrative=None, recommendations=None, analysis=None, store=None, config=None):
+def render_html(
+    windows,
+    target,
+    narrative=None,
+    recommendations=None,
+    analysis=None,
+    store=None,
+    config=None,
+    narrative_note=None,
+):
     store = store or empty_store()
     config = config or paths.shipped_config()
     previous = None
@@ -2165,13 +2195,14 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
     body = "".join(
         [
             "<header><h1>Claude token guardrail &mdash; %s</h1>" % esc(target["window"]["key"]),
-            '<p class="sub">%s &middot; %s files, %s records, %s malformed. Weighted tokens, not raw.</p>'
+            '<p class="sub">%s &middot; %s files, %s records, %s malformed. Weighted tokens, not raw.%s</p>'
             "</header>"
             % (
                 esc(target["generated_at"][:19].replace("T", " ")),
                 esc(exact(parse["files_scanned"])),
                 esc(exact(parse["records"])),
                 esc(exact(parse["malformed_lines"])),
+                "" if narrative else " &middot; " + esc(narrative_off_note(narrative_note)),
             ),
             _weights_notice(windows),
             _verdict_section(target, previous, recommendations),
@@ -2192,9 +2223,17 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
     )
 
 
-def build_narrative_prompt(target, previous, rows, recommendations=None, analysis=None):
+def narrative_context_lines(extra_context):
+    if not extra_context:
+        return []
+    return ["What changed this window and what looks wrong:", str(extra_context).strip()]
+
+
+def build_narrative_prompt(
+    target, previous, rows, recommendations=None, analysis=None, extra_context=None, sentences=None
+):
     lines = [
-        "You are writing two short paragraphs for a personal Claude Code token-usage report.",
+        "You are writing the one-paragraph diagnosis at the top of a personal Claude Code token-usage report.",
         "Window %s (%s to %s), %s weighted tokens, %s of the ceiling."
         % (
             target["window"]["key"],
@@ -2258,41 +2297,71 @@ def build_narrative_prompt(target, previous, rows, recommendations=None, analysi
                 item["confidence"],
             )
         )
+    lines.extend(narrative_context_lines(extra_context))
     lines.append(
-        "Write plain prose, no headings, no markdown emphasis, at most 120 words: what drove this window, and "
-        "then ground the advice in the recommendations listed above, leading with the largest one. Never sum "
+        "Write plain prose, no headings, no markdown emphasis, at most %d sentences and %d words: what drove "
+        "this window, and then ground the advice in the recommendations listed above, leading with the largest "
+        "one. Never sum "
         "the overlapping findings, and never suggest using fewer subagents - heavy orchestration is the "
         "intended workflow; right-size the workers and the batch size instead. Name the jobs by the "
         "descriptions above rather than by session hashes."
+        % (sentences or NARRATIVE_SENTENCES, NARRATIVE_WORDS)
     )
     return "\n".join(lines)
+
+
+def _decoded(blob):
+    return blob.decode("utf-8", "replace") if isinstance(blob, bytes) else (blob or "")
 
 
 def fetch_narrative(prompt, timeout=180, model=DEFAULT_NARRATIVE_MODEL):
     executable = shutil.which("claude")
     if not executable:
         return None, "claude CLI not on PATH"
+    environment = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     try:
         result = subprocess.run(
-            [executable, "-p", prompt, "--model", model or DEFAULT_NARRATIVE_MODEL],
+            [
+                executable,
+                "-p",
+                prompt,
+                "--model",
+                model or DEFAULT_NARRATIVE_MODEL,
+                "--output-format",
+                "text",
+            ],
             capture_output=True,
-            text=True,
             timeout=timeout,
+            env=environment,
         )
     except (OSError, subprocess.SubprocessError) as error:
         return None, str(error)
     if result.returncode != 0:
-        return None, (result.stderr or "").strip()[:300] or "exit code %d" % result.returncode
-    text = (result.stdout or "").strip()
+        return None, _decoded(result.stderr).strip()[:300] or "exit code %d" % result.returncode
+    text = _decoded(result.stdout).strip()
     return (text, None) if text else (None, "empty response")
 
 
-def write_report(windows, target, narrative, report_dir=None, recommendations=None, analysis=None, store=None, config=None):
+def write_report(
+    windows,
+    target,
+    narrative,
+    report_dir=None,
+    recommendations=None,
+    analysis=None,
+    store=None,
+    config=None,
+    narrative_note=None,
+):
     report_dir = report_dir or default_report_dir()
     os.makedirs(report_dir, exist_ok=True)
     path = os.path.join(report_dir, "%s.html" % target["window"]["key"])
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write(render_html(windows, target, narrative, recommendations, analysis, store, config))
+        handle.write(
+            render_html(
+                windows, target, narrative, recommendations, analysis, store, config, narrative_note=narrative_note
+            )
+        )
     return path
 
 
@@ -2345,16 +2414,30 @@ def console_summary(windows, target, recommendations=None):
     return "\n".join(lines)
 
 
-def narrative_for(windows, target, config, recommendations=None, analysis=None):
+def narrative_for(windows, target, config, recommendations=None, analysis=None, extra_context=None):
     if recommendations is None:
         recommendations = advice.recommend(target, target["findings"], config)
     index = [w["window"]["key"] for w in windows].index(target["window"]["key"])
     previous = windows[index - 1] if index else None
     rows = decompose_delta(previous, target) if previous else []
-    return fetch_narrative(
-        build_narrative_prompt(target, previous, rows, recommendations, analysis),
-        model=config.get("narrative_model"),
-    )
+
+    def ask(sentences):
+        return fetch_narrative(
+            build_narrative_prompt(
+                target, previous, rows, recommendations, analysis, extra_context, sentences
+            ),
+            model=config.get("narrative_model"),
+        )
+
+    text, error = ask(NARRATIVE_SENTENCES)
+    if text and over_narrative_cap(text):
+        text, error = ask(NARRATIVE_RETRY_SENTENCES)
+        if text and over_narrative_cap(text):
+            return None, "the answer ran past %d sentences or %d words twice" % (
+                NARRATIVE_MAX_SENTENCES,
+                NARRATIVE_WORDS,
+            )
+    return text, error
 
 
 def rebuild_summary(rebuilt, windows):
@@ -2403,12 +2486,17 @@ def main(argv=None):
 
     analysis, store = analysis_for(target, config, data_dir)
     narrative = None
+    narrative_note = "the narrative call was skipped for this run" if args.no_narrative else None
     if not args.no_narrative:
         narrative, error = narrative_for(windows, target, config, recommendations, analysis)
         if error:
+            narrative_note = error
             print("narrative skipped: %s" % error, file=sys.stderr)
 
-    path = write_report(windows, target, narrative, report_dir, recommendations, analysis, store, config)
+    path = write_report(
+        windows, target, narrative, report_dir, recommendations, analysis, store, config,
+        narrative_note=narrative_note,
+    )
     rebuilt = rebuild_stale(
         windows,
         config,

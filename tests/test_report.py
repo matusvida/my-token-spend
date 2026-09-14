@@ -364,11 +364,13 @@ def test_narrative_is_injected_when_present():
     assert "<li>fewer reviewers</li>" in html
 
 
-def test_narrative_absence_is_stated_not_crashed():
+def test_narrative_absence_renders_no_heading_and_one_header_line():
     windows = [make_window()]
-    page = report.render_html(windows, windows[0], narrative=None)
+    page = report.render_html(windows, windows[0], narrative=None, narrative_note="claude CLI not on PATH")
     assert "Why this week looked like this" not in page
-    assert "No narrative: writing one needs the <code>claude</code> CLI on PATH." in page
+    header = page.split("<header>")[1].split("</header>")[0]
+    assert "narrative off: claude not on PATH for the scheduled run" in header
+    assert page.count("narrative off:") == 1
 
 
 def test_build_narrative_prompt_is_small_and_warns_about_summing():
@@ -405,8 +407,8 @@ def test_fetch_narrative_returns_stdout(monkeypatch):
 
     class Result:
         returncode = 0
-        stdout = "  it was the subagents  "
-        stderr = ""
+        stdout = b"  it was the subagents  "
+        stderr = b""
 
     monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: Result())
     text, error = report.fetch_narrative("hi")
@@ -424,6 +426,81 @@ def test_fetch_narrative_treats_an_empty_answer_as_failure(monkeypatch):
 
     monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: Result())
     assert report.fetch_narrative("hi") == (None, "empty response")
+
+
+def test_fetch_narrative_decodes_utf8_output_and_asks_for_plain_text(monkeypatch):
+    monkeypatch.setattr(report.shutil, "which", lambda name: "claude")
+    seen = {}
+
+    class Result:
+        returncode = 0
+        stdout = "opus — the week".encode("utf-8")
+        stderr = b""
+
+    def spy(command, **kwargs):
+        seen["command"] = command
+        seen["kwargs"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(report.subprocess, "run", spy)
+    text, error = report.fetch_narrative("hi")
+    assert error is None
+    assert text == "opus — the week"
+    assert "--output-format" in seen["command"] and "text" in seen["command"]
+    assert seen["kwargs"]["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert not seen["kwargs"].get("text")
+
+
+def test_fetch_narrative_replaces_undecodable_bytes_rather_than_failing(monkeypatch):
+    monkeypatch.setattr(report.shutil, "which", lambda name: "claude")
+
+    class Result:
+        returncode = 0
+        stdout = "opus ".encode("utf-8") + bytes([0x97]) + " the week".encode("utf-8")
+        stderr = b""
+
+    monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: Result())
+    text, error = report.fetch_narrative("hi")
+    assert error is None
+    assert text.startswith("opus ")
+
+
+def test_the_narrative_prompt_caps_the_answer_at_three_sentences():
+    current = make_window()
+    prompt = report.build_narrative_prompt(current, None, [])
+    assert "at most 3 sentences" in prompt
+    assert "at most 2 sentences" in report.build_narrative_prompt(current, None, [], sentences=2)
+
+
+def test_the_narrative_prompt_carries_the_extra_context_it_is_handed():
+    current = make_window()
+    prompt = report.build_narrative_prompt(current, None, [], extra_context="the Linear MCP doubled")
+    assert "the Linear MCP doubled" in prompt
+
+
+def test_an_over_long_narrative_is_refused_and_asked_again_with_a_shorter_cap(monkeypatch):
+    windows = [make_window()]
+    answers = [" ".join(["word"] * 100), "It was the subagents."]
+    asked = []
+
+    def fake(prompt, timeout=180, model=None):
+        asked.append(prompt)
+        return answers[len(asked) - 1], None
+
+    monkeypatch.setattr(report, "fetch_narrative", fake)
+    text, error = report.narrative_for(windows, windows[0], CONFIG, recommendations=[])
+    assert text == "It was the subagents."
+    assert error is None
+    assert len(asked) == 2
+    assert "at most 2 sentences" in asked[1]
+
+
+def test_a_narrative_still_over_the_cap_after_the_retry_is_dropped(monkeypatch):
+    windows = [make_window()]
+    monkeypatch.setattr(report, "fetch_narrative", lambda prompt, timeout=180, model=None: ("One. Two. Three. Four. Five.", None))
+    text, error = report.narrative_for(windows, windows[0], CONFIG, recommendations=[])
+    assert text is None
+    assert "sentences" in error
 
 
 def test_console_summary_leads_with_the_budget_and_top_causes():
@@ -973,7 +1050,6 @@ def test_the_page_reads_verdict_then_actions_then_findings_then_centres_then_raw
     order = [
         html.index('<section class="card verdict">'),
         html.index("<h2>Do these first</h2>"),
-        html.index("No narrative: writing one needs the"),
         html.index("<h2>Findings</h2>"),
         html.index("<h2>Cost centres</h2>"),
         html.index("<h2>Raw breakdowns</h2>"),
