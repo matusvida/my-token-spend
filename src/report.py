@@ -1812,7 +1812,7 @@ def _finding_card(card, window, analysis, store):
     )
 
 
-FINDING_CARD_SHARE = 0.01
+FINDING_CARD_SHARE = 0.02
 
 
 def _findings_cards_section(window, analysis, store):
