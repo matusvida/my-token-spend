@@ -306,10 +306,14 @@ no timestamp on its per-file state, so the points come back only on `collect --r
 version is what makes the upgrade notice ask for that run.
 
 The tile states how many of the window's sessions were priced and how many of them crossed a
-boundary. Below `report.USD_MIN_COVERAGE` (half the window's sessions) it prints no dollar figure at
-all, only *list price unavailable: N of M sessions priced* — a total drawn from a tenth of the
-sessions is not comparable with one drawn from all of them, and two such figures side by side read
-as an inversion that is really a coverage gap. The figure is labelled *list price, as `/cost` shows it; not
+boundary. Below `report.USD_MIN_COVERAGE` (half the window's sessions) the tile is not a price tile
+at all — a total drawn from a tenth of the sessions is not comparable with one drawn from all of
+them, and two such figures side by side read as an inversion that is really a coverage gap. The slot
+carries a number the data supports instead: unused quota where a fitted quota or a config override
+exists, otherwise the session count with the subagent turns beside it. The coverage itself moves to
+one line in the raw breakdowns, naming how many of the window's sessions carry a cost entry and why
+the rest do not: Claude Code records a session's cost only when the session itself writes one, so
+sessions still open, resumed into another file, or closed without writing one carry no price. The figure is labelled *list price, as `/cost` shows it; not
 what the subscription bills* everywhere it is shown — it is Claude Code's own estimate of what the
 same tokens would have cost on the API, not a billing figure.
 
@@ -495,10 +499,12 @@ share of turns that recorded any tool call at all.
 Reads every `data/week_*.json` plus the target window's `data/records/<key>.jsonl`, and renders one
 self-contained HTML page. The reading path is, in order:
 
-1. **Verdict** — four tiles (quota or ceiling used with the method named, weighted spent, list-price
-   USD, the share of subagent spend no agent type claims). The last one is a warning, not a stat:
-   above `report.UNATTRIBUTED_WARN_SHARE` (25%) it carries a warning rule and says the runs were
-   dispatched with no `subagent_type`, so nothing further down the page can name them. The tiles sit
+1. **Verdict** — four tiles (quota or ceiling used, weighted spent, list-price USD or its stand-in,
+   the share of subagent spend no agent type claims). The first names the fitted value and the
+   sample count behind it, so a reader who remembers last week's percentage can see the denominator
+   that moved. The third is a price only where coverage allows one. The last is a warning, not a
+   stat: above `report.UNATTRIBUTED_WARN_SHARE` (25%) it carries a warning rule and says the runs
+   were dispatched with no agent type, so nothing further down the page can name them. The tiles sit
    over a seven-day burn line against the
    ceiling with the reset instant marked. The reference line is labelled *quota* only when the
    ceiling came from a usage sample or a config override, and *estimated ceiling* otherwise, so it
@@ -509,7 +515,9 @@ self-contained HTML page. The reading path is, in order:
    `CAUSE_PRECEDENCE` assigned it, largest absolute movement first, at most eight bars plus an
    *everything else* bar carrying the count. Above the chart sits a sentence generated from the
    rows, naming the largest movement and its share of the gross movement; under it the accounting
-   line, *"+800.8M accounted, +800.8M total"*. When there is no earlier window, or the earlier one
+   line, *"+800.8M accounted, +800.8M total"*. The chart ships twice: the wide rendering puts each
+   label left of the baseline, and a second one stacks the label above its bar in a narrow viewBox,
+   swapped in by stylesheet under 640px so the bars stay on screen on a phone. When there is no earlier window, or the earlier one
    holds fewer than `delta.MIN_PREVIOUS_TURNS` (100) turns, the block is one line saying so.
 3. **Why this week looked like this** — the narrative, capped at four sentences and 90 words, and
    handed the delta claim and the anomaly claims as its context. When no narrative exists neither the
@@ -519,7 +527,10 @@ self-contained HTML page. The reading path is, in order:
 4. **What looks wrong** — the anomaly lane, read from the window's stored `anomalies`. At most
    `report.ANOMALY_CARDS` (5) cards, ranked by score, and a line counting the rest. Each card is a
    claim with its measured numbers, one chart or table, the concrete action, and the coverage of the
-   field the detector read. A window with no anomaly prints one line.
+   field the detector read, named in plain words rather than by its record key and printed only when
+   some turns are missing it. Actions whose wording depends only on the anomaly's own subject are
+   built while rendering, not read from the stored string, so a rewording reaches every existing
+   window. A window with no anomaly prints one line.
 5. **Findings** — one card per finding group worth at least `report.FINDING_CARD_SHARE` (1%) of the
    window, carrying exactly one chart or table as its evidence. Everything else, the root-cause line
    included, sits behind a `<details>`; smaller findings are counted in a line and keep their rows in
@@ -532,7 +543,8 @@ self-contained HTML page. The reading path is, in order:
    footer says how many it left out.
 7. **Do these first** — two blocks. *Last week's advice* is one row per recommendation the previous
    window produced: the title, its share of that window, its share of this one, and the movement in
-   points, reading *unchanged* within `report.UNCHANGED_POINTS` (±2). The rows are read by running
+   points, reading *unchanged* only when the movement rounds to 0.0 points
+   (`report.UNCHANGED_POINTS`). The rows are read by running
    `advice.recommend` over the previous window's stored aggregate, never off the rendered page, and
    the four largest movements are drawn. *New this week* holds at most `report.NEW_CARDS` (2) cards,
    for recommendations that were absent last week or grew by more than `report.GROWN_POINTS` (5)
@@ -1579,7 +1591,9 @@ evidence-backed:
 
 The card headline and cost are the window totals from the failed-call detector, not the subtotal of
 the tools the table happens to show; when the table is truncated its footer says *"top 4 of N
-tools"*. The failed-again calls are a subset already inside that figure, so the sentence reads
+tools"*. Each row also names the lane most of that tool's failures came from — the agent or skill and
+the repo, with the count — because the error text and the call's input are not stored, so the lane is
+as close to a call site as the record store reaches, and the card's action promises no more than that. The failed-again calls are a subset already inside that figure, so the sentence reads
 *including*, never *and*, and the two are never added.
 
 The retry detector counts only repeats that failed again. A repeat that succeeded is the recovery,
