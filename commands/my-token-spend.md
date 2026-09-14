@@ -42,11 +42,20 @@ than leaving it in the window JSON. If it prints `PRICING DRIFT`, the stored rec
 with weights that no longer match the config: `collect --reprice` re-prices them from the stored
 token counts without reading a transcript, and `report --all` re-renders the pages for free.
 
-`tune` paces the last four closed windows against the ceiling, ranks agents and skills by
+`tune` opens with **Decisions this data needs from you**: the agent types on neither
+`advice.sonnet_class_agents` nor `advice.opus_class_agents`, each with its cost, its run count, its
+median thinking and output per turn, and the `config.json` line that classifies it. Relay that
+section first and in full, before any proposal or figure. Only the user can answer it, nothing else
+in the run is priced until they do, and the next run prices what they classify. Do not edit
+`config.json` for them unless they ask.
+
+It then paces the last four closed windows against the ceiling, ranks agents and skills by
 their typical cost per window, measures failed and repeated tool round trips, and maps all of it
 onto the definition files on disk with a patch per proposal. Built-in agent types have no file, so
 their spend is proposed against `env.CLAUDE_CODE_SUBAGENT_MODEL` in `~/.claude/settings.json` and
 the per-call `model` argument instead; `tune` reads that file and never writes it. It proposes only.
+The one file it writes is `data/tune_last.json` in the data home, which is how it can say what moved
+since the previous run.
 Never apply a patch it prints on the user's behalf
 unless they ask for that specific file to be changed, and never edit an agent, skill, CLAUDE.md or
 settings.json as a side effect of running it. A setting-level proposal is the widest change it can

@@ -111,7 +111,11 @@ def record(
 
 def entry_for(result, name):
     for entry in (
-        result["proposals"] + result["setting_proposals"] + result["upgrade_proposals"] + result["reported"]
+        result["proposals"]
+        + result["setting_proposals"]
+        + result["upgrade_proposals"]
+        + result["reported"]
+        + result["below_share"]
     ):
         if entry["name"] == name:
             return entry
@@ -436,7 +440,13 @@ def test_a_builtin_agent_below_the_saving_floor_still_reports_its_cost_with_no_p
     assert entry["status"] == tune.NO_FILE
     assert entry["typical_weighted"] == 260000.0
     assert entry["weighted_saving"] is None
-    assert "no file to edit" in tune.render(result)
+    assert result["below_share"] == [entry]
+    assert "1 further component(s) cleared the" in tune.render(result)
+
+    loud = four_windows([0, 0, 0, 0])
+    for data in loud:
+        data["by_agent"] = [{"key": "ghost-agent", "turns": 3, "weighted": 26000000.0}]
+    assert "no file to edit" in tune.render(build(loud, home))
 
 
 def test_an_unknown_non_builtin_agent_says_so_rather_than_guessing(home):
@@ -510,14 +520,15 @@ def test_agents_count_invocations_by_agent_run_and_skills_by_session(home):
     assert skill["quiet_invocations"] == 2
 
 
-def test_a_skill_is_reported_with_its_file_size_and_description_length_and_no_saving(home):
+def test_a_skill_is_reported_with_its_description_length_and_no_saving_and_no_file_size(home):
     path = skill_file(home / ".claude" / "skills", "linear-mcp-cli", description="x" * 300)
     result = build([window(skills=[("linear-mcp-cli", 187, 15700000.0)])], home)
     entry = entry_for(result, "linear-mcp-cli")
     assert entry["files"] == [str(path)]
     assert entry["weighted_saving"] is None
     assert entry["description_chars"] == 300
-    assert entry["file_bytes"] > 0
+    assert "file_bytes" not in entry
+    assert "bytes" not in entry["note"]
     assert "not the cost of loading it" in entry["note"]
     assert "broad enough" not in entry["note"]
 
@@ -738,8 +749,11 @@ def test_no_module_on_the_tune_path_contains_a_file_writing_call():
     src = Path(__file__).resolve().parents[1] / "src"
     for name in ("tune.py", "rules.py", "agentfiles.py", "advice.py"):
         source = (src / name).read_text(encoding="utf-8")
-        for forbidden in ("write_text(", "write_bytes(", "os.replace", "shutil.", "unlink(", "mkdir("):
-            assert forbidden not in source, "%s in %s" % (forbidden, name)
+        forbidden = ["write_bytes(", "os.replace", "shutil.", "unlink(", "mkdir("]
+        if name != "tune.py":
+            forbidden.append("write_text(")
+        for call in forbidden:
+            assert call not in source, "%s in %s" % (call, name)
         assert "open(" not in source.replace("open(path, encoding=", "READ(")
 
 
@@ -781,6 +795,7 @@ def test_running_tune_leaves_every_agent_and_skill_file_byte_identical(home, tmp
     assert cli.main(["tune"]) == 0
     after = {p: p.read_bytes() for p in sorted((home / ".claude").rglob("*")) if p.is_file()}
     assert before == after
+    assert not list((home / ".claude").rglob("tune_last.json"))
     out = capsys.readouterr().out
     assert "PROPOSALS" in out
     assert "UPGRADE PROPOSAL" in out
@@ -805,16 +820,6 @@ def test_the_cli_flags_override_the_configured_floors(home, tmp_path, monkeypatc
     live(tmp_path, monkeypatch, home)
     assert cli.main(["tune", "--min-saving", "999999999"]) == 0
     assert "PROPOSALS (0)" in capsys.readouterr().out
-
-
-def test_tune_writes_nothing_into_the_data_home(home, tmp_path, monkeypatch, capsys):
-    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
-    data_home = live(tmp_path, monkeypatch, home, headroom=True)
-    before = {p: p.stat().st_mtime_ns for p in sorted(data_home.rglob("*")) if p.is_file()}
-    assert cli.main(["tune"]) == 0
-    after = {p: p.stat().st_mtime_ns for p in sorted(data_home.rglob("*")) if p.is_file()}
-    assert before == after
-    capsys.readouterr()
 
 
 def test_the_builtin_agent_list_and_cheap_families_live_in_the_shipped_config():
@@ -845,3 +850,209 @@ def test_an_agent_is_only_already_right_sized_for_a_configured_cheap_family(home
     assert entry_for(build(windows, home), "mr-scout")["status"] == tune.ALREADY_RIGHT_SIZED
     result = tune.build(windows, strict, roots=roots_for(home), now=NOW)
     assert entry_for(result, "mr-scout")["status"] == tune.PROPOSAL
+
+
+def test_an_unclassified_agent_above_the_floor_becomes_a_decision_with_its_numbers(home):
+    records = {
+        "week_2026_08_22": [
+            dict(record("2026-08-22T10:00:00+00:00", agent="general-purpose", agent_id="a1"), thinking=400, output=120),
+            dict(record("2026-08-22T10:10:00+00:00", agent="general-purpose", agent_id="a1"), thinking=600, output=180),
+            dict(record("2026-08-22T11:00:00+00:00", agent="general-purpose", agent_id="a2"), thinking=800, output=900),
+        ]
+    }
+    result = build([window(agents=[("general-purpose", 3, 9000000.0)])], home, records=records)
+    assert [row["name"] for row in result["decisions"]] == ["general-purpose"]
+    row = result["decisions"][0]
+    assert row["typical_weighted"] == 9000000.0
+    assert row["invocations"] == 2
+    assert row["median_thinking_per_turn"] == 600.0
+    assert row["median_output_per_turn"] == 180.0
+    assert row["config_line"] == '"general-purpose",'
+
+
+def test_an_agent_on_either_class_list_is_not_a_decision(home):
+    agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
+    result = build([window(agents=[("mr-scout", 100, 9000000.0)])], home)
+    assert result["decisions"] == []
+
+
+def test_a_skill_is_never_a_decision_and_a_cheap_agent_is_not_either(home):
+    result = build(
+        [window(agents=[("tiny-agent", 2, 1000.0)], skills=[("some-skill", 200, 90000000.0)])], home
+    )
+    assert result["decisions"] == []
+
+
+def test_decisions_are_sorted_by_typical_cost(home):
+    data = window(agents=[("small-one", 10, 3000000.0), ("big-one", 10, 30000000.0)])
+    assert [row["name"] for row in build([data], home)["decisions"]] == ["big-one", "small-one"]
+
+
+def test_the_decisions_section_opens_the_output_and_asks_for_a_classification(home):
+    result = build([window(agents=[("general-purpose", 3, 9000000.0)])], home)
+    rendered = tune.render(result)
+    body = rendered.split("\n")
+    first = next(line for line in body if line.startswith("1. "))
+    assert first.startswith("1. DECISIONS THIS DATA NEEDS FROM YOU")
+    assert body.index(first) < body.index(next(l for l in body if l.startswith("3. PACING")))
+    assert "general-purpose" in rendered
+    assert 'add the line "general-purpose",' in rendered
+    assert "advice.sonnet_class_agents" in rendered and "advice.opus_class_agents" in rendered
+    assert "classify these and the next run prices them" in rendered
+
+
+def test_the_decisions_section_says_so_when_nothing_needs_classifying(home):
+    agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
+    rendered = tune.render(build([window(agents=[("mr-scout", 100, 9000000.0)])], home))
+    assert "1. DECISIONS THIS DATA NEEDS FROM YOU (0)" in rendered
+    assert "classify these and the next run prices them" not in rendered
+
+
+def setting_windows(costs):
+    starts = ["2026-08-01", "2026-08-08", "2026-08-15", "2026-08-22"]
+    ends = [
+        "2026-08-07T22:00:00+00:00",
+        "2026-08-14T22:00:00+00:00",
+        "2026-08-21T22:00:00+00:00",
+        "2026-08-28T22:00:00+00:00",
+    ]
+    return [
+        window(start=start, end_utc=end, agents=[(name, 100, cost) for name, cost in costs])
+        for start, end in zip(starts, ends)
+    ]
+
+
+def classed(*names):
+    return dict(CONFIG, advice=dict(CONFIG["advice"], sonnet_class_agents=list(names)))
+
+
+def test_a_setting_proposal_worth_under_one_percent_of_a_window_folds_into_a_counted_line(home):
+    windows = setting_windows([("Explore", 900000.0)])
+    result = tune.build(windows, classed("Explore"), roots=roots_for(home), now=NOW)
+    assert [e["name"] for e in result["setting_proposals"]] == ["Explore"]
+    assert [e["name"] for e in result["folded_setting_proposals"]] == ["Explore"]
+    rendered = tune.render(result)
+    assert "1 setting-level proposal(s)" in rendered and "below 1% of a typical window" in rendered
+    assert "Blast radius" not in rendered
+
+
+def test_a_setting_proposal_worth_over_one_percent_still_renders_a_full_card(home):
+    windows = setting_windows([("Explore", 90000000.0)])
+    result = tune.build(windows, classed("Explore"), roots=roots_for(home), now=NOW)
+    assert result["folded_setting_proposals"] == []
+    assert "Blast radius" in tune.render(result)
+
+
+def test_cost_without_a_proposal_lists_only_components_above_three_percent_of_a_window(home):
+    data = window(agents=[("loud-agent", 10, 30000000.0), ("quiet-agent", 10, 1000000.0)])
+    result = build([data], home)
+    assert [e["name"] for e in result["reported"]] == ["loud-agent"]
+    assert result["reported_below_share"] == 1
+    section = tune.render(result).split("9. COST WITHOUT A PROPOSAL")[1]
+    assert "loud-agent" in section
+    assert "quiet-agent" not in section
+    assert "1 further component(s) cleared the" in section
+
+
+def test_the_first_run_says_there_is_nothing_to_compare(home):
+    rendered = tune.render(build([window(agents=[("general-purpose", 3, 9000000.0)])], home))
+    assert "2. WHAT MOVED SINCE LAST RUN" in rendered
+    assert "no previous tune run is recorded" in rendered
+
+
+def test_what_moved_shows_the_figure_then_and_now_for_each_proposal(home):
+    agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
+    windows = four_windows([20000000.0, 20000000.0, 20000000.0, 20000000.0])
+    previous = {
+        "generated_at": "2026-08-24T00:00:00+00:00",
+        "windows": ["week_2026_07_25"],
+        "proposals": [
+            {"component": "agent", "name": "mr-scout", "kind": tune.PROPOSAL, "weighted": 1000000.0},
+            {"component": "agent", "name": "gone-agent", "kind": tune.PROPOSAL, "weighted": 5000000.0},
+        ],
+    }
+    result = tune.build(windows, CONFIG, roots=roots_for(home), now=NOW, previous_state=previous)
+    rows = {row["name"]: row for row in result["movement"]["rows"]}
+    assert result["movement"]["first_run"] is False
+    assert rows["mr-scout"]["then"] == 1000000.0
+    assert rows["mr-scout"]["now"] > 1000000.0
+    assert rows["gone-agent"]["now"] is None
+    rendered = tune.render(result)
+    assert "against the previous run of 2026-08-24" in rendered
+    assert "gone-agent" in rendered and "no longer proposed" in rendered
+
+
+def test_a_proposal_absent_from_the_previous_run_is_marked_new(home):
+    agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
+    windows = four_windows([20000000.0, 20000000.0, 20000000.0, 20000000.0])
+    result = tune.build(
+        windows,
+        CONFIG,
+        roots=roots_for(home),
+        now=NOW,
+        previous_state={"generated_at": "2026-08-24T00:00:00+00:00", "proposals": []},
+    )
+    assert result["movement"]["rows"][0]["then"] is None
+    assert "new this run" in tune.render(result)
+
+
+def test_the_state_written_carries_every_proposal_and_the_decisions(home, tmp_path):
+    agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
+    windows = four_windows([20000000.0, 20000000.0, 20000000.0, 20000000.0])
+    for data in windows:
+        data["by_agent"].append({"key": "general-purpose", "turns": 5, "weighted": 9000000.0})
+    result = tune.build(windows, CONFIG, roots=roots_for(home), now=NOW)
+    target = tune.save_state(tmp_path, result)
+    assert target == tmp_path / "tune_last.json"
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["generated_at"] == result["generated_at"]
+    assert payload["proposals"][0]["name"] == "mr-scout"
+    assert payload["proposals"][0]["kind"] == tune.PROPOSAL
+    assert [d["name"] for d in payload["decisions"]] == ["general-purpose"]
+    assert tune.load_state(tmp_path) == payload
+
+
+def test_a_missing_or_corrupt_state_file_reads_as_no_previous_run(tmp_path):
+    assert tune.load_state(tmp_path) is None
+    (tmp_path / "tune_last.json").write_text("{not json", encoding="utf-8")
+    assert tune.load_state(tmp_path) is None
+
+
+def test_tune_writes_exactly_one_file_into_the_data_home_and_nothing_else(
+    home, tmp_path, monkeypatch, capsys
+):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    data_home = live(tmp_path, monkeypatch, home, headroom=True)
+    before = {p: p.stat().st_mtime_ns for p in sorted(data_home.rglob("*")) if p.is_file()}
+    assert cli.main(["tune"]) == 0
+    capsys.readouterr()
+    after = {p: p.stat().st_mtime_ns for p in sorted(data_home.rglob("*")) if p.is_file()}
+    state = data_home / "data" / "tune_last.json"
+    assert set(after) - set(before) == {state}
+    assert before == {path: stamp for path, stamp in after.items() if path != state}
+    assert json.loads(state.read_text(encoding="utf-8"))["windows"] == ["week_2026_08_22"]
+
+
+def test_a_second_tune_run_compares_against_the_first(home, tmp_path, monkeypatch, capsys):
+    agent_file(home / ".claude" / "agents", "deep-reviewer", model="sonnet")
+    live(tmp_path, monkeypatch, home, headroom=True)
+    assert cli.main(["tune"]) == 0
+    assert "no previous tune run is recorded" in capsys.readouterr().out
+    assert cli.main(["tune"]) == 0
+    second = capsys.readouterr().out
+    assert "against the previous run of" in second
+    assert "deep-reviewer" in second
+
+
+def test_the_only_write_on_the_tune_path_is_the_state_file():
+    source = (Path(__file__).resolve().parents[1] / "src" / "tune.py").read_text(encoding="utf-8")
+    assert source.count("write_text(") == 1
+    assert source.split("def save_state")[1].count("write_text(") == 1
+    assert 'STATE_FILENAME = "tune_last.json"' in source
+
+
+def test_a_decision_that_is_here_on_one_heavy_window_says_so(home):
+    windows = four_windows([0, 0, 0, 0])
+    windows[0]["by_agent"] = [{"key": "ghost-agent", "turns": 3, "weighted": 9000000.0}]
+    rendered = tune.render(build(windows, home))
+    assert "it is here on one heavy window of 9.0M, not on a typical one." in rendered
