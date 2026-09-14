@@ -124,3 +124,63 @@ def total_delta(previous, current):
     return current["totals"]["weighted"] - previous["totals"]["weighted"]
 
 
+MIN_PREVIOUS_TURNS = 100
+
+
+def claim_sentence(rows, total):
+    movement = sum(abs(row["delta"]) for row in rows)
+    if not rows or not movement:
+        return "Nothing moved between the two windows."
+    top = max(rows, key=lambda row: abs(row["delta"]))
+    return "%s is %s of the %s movement between the two windows, %s." % (
+        top["phrase"][0].upper() + top["phrase"][1:],
+        "%.0f%%" % (100 * abs(top["delta"]) / movement),
+        "%s weighted" % _compact(movement),
+        "which ended %s overall" % _signed(total),
+    )
+
+
+def _compact(value):
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+        if abs(value) >= limit:
+            return "%.1f%s" % (value / limit, suffix)
+    return "%.0f" % value
+
+
+def _signed(value):
+    return ("+" if value >= 0 else "-") + _compact(abs(value))
+
+
+def block(previous, current, min_turns=MIN_PREVIOUS_TURNS):
+    if previous is None:
+        return {
+            "previous": None,
+            "comparable": False,
+            "reason": "no previous window to compare",
+            "rows": [],
+            "total": None,
+            "accounted": 0.0,
+            "claim": None,
+        }
+    turns = previous["totals"]["turns"]
+    if turns < min_turns:
+        return {
+            "previous": previous["window"]["key"],
+            "comparable": False,
+            "reason": "no previous window to compare: %s holds only %d turns" % (previous["window"]["key"], turns),
+            "rows": [],
+            "total": None,
+            "accounted": 0.0,
+            "claim": None,
+        }
+    rows = decompose_delta(previous, current)
+    total = total_delta(previous, current)
+    return {
+        "previous": previous["window"]["key"],
+        "comparable": True,
+        "reason": None,
+        "rows": rows,
+        "total": total,
+        "accounted": sum(row["delta"] for row in rows),
+        "claim": claim_sentence(rows, total),
+    }

@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import context
 import cost
+import delta
 import quota
 import rules
 
@@ -579,6 +580,7 @@ def aggregate_window(
     samples=None,
     costs=None,
     owned_sessions=None,
+    previous_window=None,
 ):
     tz = zone(config)
     start_utc, end_utc, boundary_source = window_bounds(start_date, config, instants)
@@ -613,7 +615,7 @@ def aggregate_window(
         bucket["count"] += 1
         bucket["weighted_cost"] += finding["weighted_cost"]
 
-    return {
+    aggregate = {
         "schema_version": SCHEMA_VERSION,
         "analysis_version": rules.ANALYSIS_VERSION,
         "generated_at": now.isoformat(),
@@ -655,9 +657,12 @@ def aggregate_window(
         ),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
+        "anomalies": rules.anomalies(records, config),
         "ceiling": ceiling_state,
         "parse": dict(parse_stats, records=len(records)),
     }
+    aggregate["delta"] = delta.block(previous_window, aggregate)
+    return aggregate
 
 
 def headroom_context(block, key, weighted, previous_weighted, samples, start_utc, end_utc, now):
@@ -895,6 +900,17 @@ def _prune_window(store_dir, data_dir, reports_dir, key):
             path.unlink()
 
 
+def _previous_aggregate(ordered, start, produced, data_dir):
+    index = ordered.index(start) if start in ordered else -1
+    if index <= 0:
+        return None
+    earlier = ordered[index - 1]
+    if earlier in produced:
+        return produced[earlier]
+    stored = _load_json(data_dir / (window_key(date.fromisoformat(earlier)) + ".json"), None)
+    return stored or None
+
+
 def _finalize(
     stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None, costs=None,
     extra_windows=(),
@@ -922,6 +938,7 @@ def _finalize(
     written = []
     extra = []
     owned = cost.sessions_by_window(windows)
+    produced = {}
     for start, records in windows.items():
         if not records:
             continue
@@ -939,8 +956,10 @@ def _finalize(
             samples=samples,
             costs=costs,
             owned_sessions=owned.get(start, set()),
+            previous_window=_previous_aggregate(ordered, start, produced, data_dir),
         )
         key = aggregate["window"]["key"]
+        produced[start] = aggregate
         _write_json(data_dir / (key + ".json"), aggregate)
         (reports_dir / (key + ".md")).write_text(render_markdown(aggregate), encoding="utf-8")
         (written if requested else extra).append(aggregate)

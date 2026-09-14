@@ -6,7 +6,7 @@ import context
 import text
 
 
-ANALYSIS_VERSION = 1
+ANALYSIS_VERSION = 2
 
 
 FAILED_CALLS = "failed_tool_calls"
