@@ -400,6 +400,40 @@ def test_whale_turns_at_a_different_cost_stay_separate_rows():
     assert "near-identical" not in body
 
 
+def _ceiling(estimate, method, **extra):
+    return dict(
+        {"estimate": estimate, "method": method, "approximate": True, "percent_used": 52.4,
+         "samples_used": 9, "band_pct": 3.0, "cluster_size": 2, "windows_considered": 4},
+        **extra
+    )
+
+
+def test_a_closed_window_says_the_fitted_ceiling_was_applied_retroactively():
+    window = make_window(is_current=False)
+    window["ceiling"] = _ceiling(3.3e9, "quota-fit")
+    verdict = report.render_html([window], window).split('<section class="card verdict">')[1]
+    assert "applied to this closed window once the fit existed" in verdict
+
+
+def test_an_open_window_does_not_claim_a_retroactive_ceiling():
+    window = make_window()
+    window["ceiling"] = _ceiling(3.3e9, "quota-fit")
+    verdict = report.render_html([window], window).split('<section class="card verdict">')[1]
+    assert "applied to this closed window" not in verdict
+
+
+def test_the_ceiling_change_notice_renders_once(tmp_path):
+    window = make_window()
+    window["ceiling"] = _ceiling(1.43e9, "top-cluster")
+    report.write_report([window], window, None, str(tmp_path))
+    window["ceiling"] = _ceiling(3.3e9, "quota-fit")
+    path = report.write_report([window], window, None, str(tmp_path))
+    changed = Path(path).read_text(encoding="utf-8")
+    assert "ceiling changed since this page was last rendered: 1.4B estimated to 3.3B fitted" in changed
+    again = Path(report.write_report([window], window, None, str(tmp_path))).read_text(encoding="utf-8")
+    assert "ceiling changed since this page was last rendered" not in again
+
+
 def test_narrative_is_injected_when_present():
     windows = [make_window()]
     html = report.render_html(windows, windows[0], narrative="Subagents ate the week.\n\n- fewer reviewers")

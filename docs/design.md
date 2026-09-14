@@ -676,7 +676,21 @@ The first backfill run computes weighted totals for every historical window,
 windows whose totals cluster at the top of the observed distribution are treated
 as windows where the cap was approached, and the ceiling is derived from that
 cluster. It is an estimate of a habit, not a quota, and every place that shows
-it says so.
+it says so. When any quota sample exists at all, the estimate is labelled
+*estimate, likely low* and states the floor that sample already implies: a single
+utilization reading bounds the real ceiling from below at `spent / utilization`,
+so an estimate under that floor is known to be too small before anything else is
+measured.
+
+**One ceiling, applied everywhere, and a page that says when it moved.** The
+ceiling is computed once per `collect` run over every window, so a closed window
+picks up a fitted ceiling retroactively the moment the fit exists, and its tile
+says so rather than leaving the reader with two denominators for one week. The
+rendered page carries the ceiling and its method in `report-ceiling` and
+`report-ceiling-method` meta tags; the next render compares against them and the
+Verdict states the move once, as *ceiling changed since this page was last
+rendered: 1.4B estimated to 3.3B fitted*. The following render stamps the new
+value, so the notice does not repeat.
 
 Derived figures: percent consumed, current burn rate against the rate sustainable
 for the remainder of the window, and projected exhaustion date.
@@ -870,6 +884,9 @@ ceiling
   latest_pct_is_fresh    true when that sample is younger than fresh_hours
   percent_used           null when no estimate exists
   percent_used_source    quota-sample | ceiling-estimate
+  floor                  spent / utilization from the best quota sample, or null
+  floor_spent            the weighted spend behind that floor
+  floor_pct              the utilization behind that floor
   burn_rate_per_day      weighted / elapsed_days
   remaining_weighted
   sustainable_rate_per_day  remaining budget / days left in the window

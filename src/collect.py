@@ -413,6 +413,15 @@ def ceiling_method_text(ceiling):
     if method == "override":
         return "the ceiling set in your config"
     if method == "top-cluster":
+        if ceiling.get("floor"):
+            return (
+                "estimate, likely low: a quota sample already puts the floor at %s (%s spent at %s%% used)"
+                % (
+                    "{:,.0f}".format(ceiling["floor"]),
+                    "{:,.0f}".format(ceiling["floor_spent"]),
+                    "{:.1f}".format(ceiling["floor_pct"]),
+                )
+            )
         return "estimated ceiling, from your own heavy weeks"
     if method == "insufficient-data":
         return "no ceiling yet, too few windows collected"
@@ -462,7 +471,20 @@ def estimate_ceiling(window_totals, config, samples=None, instants=None, now=Non
         "approximate": True,
         "cluster_size": size,
         "windows_considered": len(window_totals),
+        **sample_floor(samples or []),
     }
+
+
+def sample_floor(samples):
+    best = None
+    for entry in samples:
+        pct, weighted = entry.get("seven_day_pct"), entry.get("weighted_so_far")
+        if not pct or not weighted or pct <= 0:
+            continue
+        implied = float(weighted) / (float(pct) / 100.0)
+        if best is None or implied > best["floor"]:
+            best = {"floor": implied, "floor_spent": float(weighted), "floor_pct": float(pct)}
+    return best or {"floor": None, "floor_spent": None, "floor_pct": None}
 
 
 TOKEN_FIELDS = ("input", "output", "thinking", "cache_create", "cache_read")

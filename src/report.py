@@ -1357,7 +1357,47 @@ def _burn_chart(window):
     )
 
 
-def _verdict_section(window, previous, recommendations):
+CEILING_METHOD_WORDS = {
+    "quota-fit": "fitted",
+    "top-cluster": "estimated",
+    "override": "set in config",
+    "insufficient-data": "unknown",
+}
+
+CEILING_CHANGE_TOLERANCE = 0.005
+
+
+def ceiling_tile_note(window):
+    ceiling = window["ceiling"]
+    if collect.quota_is_known(ceiling):
+        note = collect.ceiling_method_text(ceiling)
+        if ceiling.get("method") == "quota-fit" and not window["window"].get("is_current"):
+            note += "; applied to this closed window once the fit existed"
+        return note
+    if ceiling.get("floor"):
+        return collect.ceiling_method_text(ceiling)
+    return "quota unknown this window, ceiling estimated from your own heavy weeks"
+
+
+def ceiling_change_note(stamp, ceiling):
+    if not stamp:
+        return None
+    before, before_method = stamp.get("ceiling"), stamp.get("ceiling_method")
+    if before is None and not before_method:
+        return None
+    now, method = ceiling.get("estimate"), ceiling.get("method")
+    moved = before is None or now is None or abs(now - before) > CEILING_CHANGE_TOLERANCE * max(before, now)
+    if not moved and before_method == method:
+        return None
+    return "ceiling changed since this page was last rendered: %s %s to %s %s" % (
+        "unknown" if before is None else compact(before),
+        CEILING_METHOD_WORDS.get(before_method, before_method or "unknown"),
+        "unknown" if now is None else compact(now),
+        CEILING_METHOD_WORDS.get(method, method or "unknown"),
+    )
+
+
+def _verdict_section(window, previous, recommendations, ceiling_change=None):
     ceiling = window["ceiling"]
     totals = window["totals"]
     unattributed, sidechain = unattributed_subagent(window)
@@ -1366,9 +1406,7 @@ def _verdict_section(window, previous, recommendations):
         _tile(
             "%s used" % ("Quota" if collect.quota_is_known(ceiling) else "Ceiling"),
             percent(ceiling["percent_used"]) if ceiling.get("percent_used") is not None else "unknown",
-            collect.ceiling_method_text(ceiling)
-            if collect.quota_is_known(ceiling)
-            else "quota unknown this window, ceiling estimated from your own heavy weeks",
+            ceiling_tile_note(window),
         ),
         _tile(
             "Weighted spent",
@@ -1385,13 +1423,14 @@ def _verdict_section(window, previous, recommendations):
     return (
         '<section class="card verdict"><h2>%s</h2>'
         '<p class="sub">%s to %s, %s.</p>'
-        '<div class="tiles">%s</div>%s%s</section>'
+        '<div class="tiles">%s</div>%s%s%s</section>'
         % (
             esc(window["window"]["key"]),
             esc(window["window"]["start"]),
             esc(window["window"]["end"]),
             esc(window["window"]["timezone"]),
             "".join(tiles),
+            '<p class="notice">%s</p>' % esc(ceiling_change) if ceiling_change else "",
             _headroom_line(window, recommendations),
             _burn_chart(window),
         )
@@ -2075,12 +2114,16 @@ def format_stamp(window):
         '<meta name="report-window-weighted" content="%.4f">'
         '<meta name="report-window-turns" content="%d">'
         '<meta name="report-window-closed" content="%s">'
+        '<meta name="report-ceiling" content="%s">'
+        '<meta name="report-ceiling-method" content="%s">'
         % (
             REPORT_FORMAT_VERSION,
             esc(window["window"]["key"]),
             float(totals["weighted"]),
             int(round(totals["turns"])),
             "false" if window["window"].get("is_current") else "true",
+            "" if window["ceiling"].get("estimate") is None else "%.4f" % float(window["ceiling"]["estimate"]),
+            esc(window["ceiling"].get("method") or ""),
         )
     )
 
@@ -2128,6 +2171,8 @@ def read_stamp(path):
         "weighted": _number(_meta_value(text, "report-window-weighted"), float),
         "turns": _number(_meta_value(text, "report-window-turns"), int),
         "closed": _meta_value(text, "report-window-closed") == "true",
+        "ceiling": _number(_meta_value(text, "report-ceiling"), float),
+        "ceiling_method": _meta_value(text, "report-ceiling-method") or None,
         "narrative": narrative or None,
     }
 
@@ -2215,6 +2260,7 @@ def render_html(
     store=None,
     config=None,
     narrative_note=None,
+    ceiling_change=None,
 ):
     store = store or empty_store()
     config = config or paths.shipped_config()
@@ -2251,7 +2297,7 @@ def render_html(
                 "" if narrative else " &middot; " + esc(narrative_off_note(narrative_note)),
             ),
             _weights_notice(windows),
-            _verdict_section(target, previous, recommendations),
+            _verdict_section(target, previous, recommendations, ceiling_change),
             _actions_section(recommendations, anchors, config),
             _narrative_section(narrative),
             _findings_cards_section(target, analysis, store),
@@ -2402,10 +2448,19 @@ def write_report(
     report_dir = report_dir or default_report_dir()
     os.makedirs(report_dir, exist_ok=True)
     path = os.path.join(report_dir, "%s.html" % target["window"]["key"])
+    change = ceiling_change_note(read_stamp(path), target["ceiling"])
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(
             render_html(
-                windows, target, narrative, recommendations, analysis, store, config, narrative_note=narrative_note
+                windows,
+                target,
+                narrative,
+                recommendations,
+                analysis,
+                store,
+                config,
+                narrative_note=narrative_note,
+                ceiling_change=change,
             )
         )
     return path
