@@ -14,6 +14,7 @@ import cost
 import delta
 import quota
 import rules
+import text
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -121,7 +122,7 @@ def agent_calls(entry, config):
                 "subagent_type": payload.get("subagent_type"),
                 "model": payload.get("model"),
                 "prompt_chars": len(prompt),
-                "prompt_head": prompt[:limit] or None,
+                "prompt_head": text.repair_mojibake(prompt[:limit]) or None,
             }
         )
     return calls
@@ -206,14 +207,14 @@ def normalize(entry, config):
 def _prompt_text(entry, limit):
     content = (entry.get("message") or {}).get("content")
     if isinstance(content, str):
-        text = content
+        body = content
     elif isinstance(content, list):
         parts = [b.get("text") or "" for b in content if isinstance(b, dict) and b.get("type") == "text"]
-        text = "\n".join(p for p in parts if p)
+        body = "\n".join(p for p in parts if p)
     else:
         return None
-    text = text.strip()
-    return text[:limit] if text else None
+    body = text.repair_mojibake(body.strip())
+    return body[:limit] if body else None
 
 
 DENIED_MARKERS = ("want to proceed with this tool use", "tool use was rejected")

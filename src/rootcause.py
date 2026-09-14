@@ -93,13 +93,13 @@ def strip_boilerplate(prompt):
 
 
 def label_of(prompt, limit=90):
-    text = strip_boilerplate(prompt)
-    if not text:
+    body = text.repair_mojibake(strip_boilerplate(prompt))
+    if not body:
         return "no prompt captured"
-    if len(text) <= limit:
-        return text
-    cut = text[:limit].rsplit(" ", 1)[0]
-    return (cut or text[:limit]).rstrip(" ,.;:") + "..."
+    if len(body) <= limit:
+        return body
+    cut = body[:limit].rsplit(" ", 1)[0]
+    return (cut or body[:limit]).rstrip(" ,.;:") + "..."
 
 
 def _parse_ts(value):

@@ -777,7 +777,7 @@ SUMMARY_ATTR = re.compile(r'summary="([^"]{3,})"')
 
 
 def _prompt_label(prompt, limit):
-    body = str(prompt or "").strip()
+    body = text.repair_mojibake(str(prompt or "").strip())
     if not body:
         return None
     match = SUMMARY_ATTR.search(body)

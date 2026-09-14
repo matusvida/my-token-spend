@@ -231,3 +231,33 @@ def test_the_entrypoint_of_a_turn_is_captured():
 
 def test_a_turn_without_an_entrypoint_records_none():
     assert collect.normalize(entry(), CONFIG)["entrypoint"] is None
+
+
+def test_a_double_encoded_prompt_is_repaired_when_it_is_captured():
+    record = collect._prompt_text(
+        {"message": {"content": [{"type": "text", "text": "acting for MatÃºÅ¡ Vida"}]}}, 200
+    )
+    assert record == "acting for Matúš Vida"
+
+
+def test_a_double_encoded_agent_dispatch_prompt_is_repaired():
+    calls = collect.agent_calls(
+        {
+            "type": "assistant",
+            "uuid": "u1",
+            "timestamp": "2026-08-25T10:00:00.000Z",
+            "sessionId": "s1",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "Agent",
+                        "input": {"prompt": "acting for MatÃºÅ¡ Vida", "description": "d"},
+                    }
+                ]
+            },
+        },
+        CONFIG,
+    )
+    assert calls[0]["prompt_head"] == "acting for Matúš Vida"

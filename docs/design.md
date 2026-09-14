@@ -462,7 +462,8 @@ the prompt it was given. Measured here: 98 of 123 runs in `week_2026_09_05`. Run
 cluster on **tool mix, working directory, branch and agent type** — the fields every turn carries in
 full. `prompt` is deliberately *not* a clustering input: it is stored
 truncated at `prompt_label_chars` and often begins with skill boilerplate. It is used only as a
-human label, after known boilerplate prefixes are stripped; when what remains is too short to name
+human label, after known boilerplate prefixes are stripped and after `text.repair_mojibake` undoes
+a double UTF-8 encoding in the stored bytes; when what remains is too short to name
 a job the label is derived from the tools, repo and branch instead, and the cluster says which of
 the two it is. Every cluster reports a confidence (`named`, `high`, `medium`, `low`, `single run`,
 `grouping only`) computed from run count, keyword agreement between the member runs' labels and

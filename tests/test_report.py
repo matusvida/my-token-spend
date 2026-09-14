@@ -2105,3 +2105,11 @@ def test_the_whale_legend_drops_a_class_that_clears_the_share_but_not_a_pixel():
     html = report._whale_chart_html(chart)
     assert _swatches(html) == ["--series-1"]
     assert "Smaller classes omitted." in html
+
+
+def test_a_session_label_repairs_a_double_encoded_prompt():
+    assert report.session_label({"first_prompt": "acting for MatÃºÅ¡ Vida"}) == "acting for Matúš Vida"
+
+
+def test_a_clean_session_label_is_left_alone():
+    assert report.session_label({"first_prompt": "acting for Matúš Vida"}) == "acting for Matúš Vida"

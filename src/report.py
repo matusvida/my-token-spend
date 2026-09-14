@@ -203,7 +203,7 @@ def lane_totals(window):
 
 
 def session_label(session):
-    prompt = (session.get("first_prompt") or "").strip().replace("\n", " ")
+    prompt = text.repair_mojibake((session.get("first_prompt") or "").strip()).replace("\n", " ")
     if not prompt:
         return "no prompt captured"
     if len(prompt) > 90:
@@ -981,7 +981,7 @@ def _whales_section(window):
             finding["evidence"].get("attributionAgent") or "-",
             repo_label(finding["evidence"].get("cwd")),
             (finding["evidence"].get("ts") or "")[:19].replace("T", " "),
-            (finding["evidence"].get("prompt") or "-")[:80],
+            text.repair_mojibake((finding["evidence"].get("prompt") or "-")[:80]),
         ]
         for group in collapse_whales(whales)
         for finding in [group[0]]
