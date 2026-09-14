@@ -845,6 +845,19 @@ def test_current_pages_are_not_stale(tmp_path):
     assert report.stale_windows(windows, build_reports(tmp_path, windows)) == []
 
 
+def test_a_page_one_version_behind_is_rebuilt_by_a_plain_run(tmp_path):
+    windows = two_windows()
+    data_dir = write_windows(str(tmp_path / "data"), windows)
+    report_dir = str(tmp_path / "reports")
+    argv = ["--no-narrative", "--data-dir", data_dir, "--report-dir", report_dir]
+    assert report.main(argv) == 0
+    page = os.path.join(report_dir, "week_2026_08_15.html")
+    downgrade_stamp(page, version=report.REPORT_FORMAT_VERSION - 1)
+    assert [w["window"]["key"] for w, _ in report.stale_windows(windows, report_dir)] == ["week_2026_08_15"]
+    assert report.main(argv) == 0
+    assert report.read_stamp(page)["format_version"] == report.REPORT_FORMAT_VERSION
+
+
 def test_main_rebuilds_only_the_page_that_is_behind(tmp_path, capsys):
     windows = two_windows()
     data_dir = write_windows(str(tmp_path / "data"), windows)
@@ -970,19 +983,23 @@ def test_main_shouts_when_a_closed_window_rebuild_changes_the_numbers(tmp_path, 
 
 
 @pytest.mark.skipif(not os.path.isdir(REAL_DATA), reason="no collected data on this machine")
-def test_every_real_page_carries_the_current_stamp():
+def test_every_real_page_behind_the_current_version_is_queued_for_rebuild():
     real_reports = os.path.join(os.path.dirname(REAL_DATA), "reports")
     pages = sorted(f for f in os.listdir(real_reports)) if os.path.isdir(real_reports) else []
     pages = [f for f in pages if f.endswith(".html")]
     if not pages:
         pytest.skip("no rendered reports")
-    behind = [
-        page
-        for page in pages
-        if (report.read_stamp(os.path.join(real_reports, page)) or {}).get("format_version", 0)
-        < report.REPORT_FORMAT_VERSION
-    ]
-    assert behind == []
+    stamps = {page: report.read_stamp(os.path.join(real_reports, page)) for page in pages}
+    assert all(stamp is not None for stamp in stamps.values())
+    assert all(0 < stamp["format_version"] <= report.REPORT_FORMAT_VERSION for stamp in stamps.values())
+    behind = {
+        os.path.splitext(page)[0]
+        for page, stamp in stamps.items()
+        if stamp["format_version"] < report.REPORT_FORMAT_VERSION
+    }
+    windows = report.load_windows(REAL_DATA)
+    queued = {w["window"]["key"] for w, _ in report.stale_windows(windows, real_reports)}
+    assert behind <= queued
 
 
 def strip_narrative_attribute(path):

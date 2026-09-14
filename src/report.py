@@ -70,7 +70,7 @@ def default_config_path():
     return str(paths.effective_config_path())
 
 
-REPORT_FORMAT_VERSION = 3
+REPORT_FORMAT_VERSION = 4
 
 DEFAULT_NARRATIVE_MODEL = "sonnet"
 
