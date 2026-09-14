@@ -749,7 +749,10 @@ def _coverage_note(coverage):
 ANOMALY_ANCHOR_TEXT = {evidence.ROUND_TRIPS: "round trips table"}
 
 
-ANOMALY_ACTIONS = {rules.FAILING_TOOL: lambda item: rules.failing_tool_action(item["subject"])}
+ANOMALY_ACTIONS = {
+    rules.FAILING_TOOL: lambda item: rules.failing_tool_action(item["subject"]),
+    rules.UNATTRIBUTED_SUBAGENTS: lambda item: rules.unattributed_subagents_action(),
+}
 
 
 def anomaly_action_text(item):

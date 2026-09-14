@@ -85,3 +85,13 @@ def test_a_footer_saying_full_coverage_is_not_printed_at_all():
         )
     )
     assert "chart-note" not in card
+
+
+def test_the_unattributed_subagent_action_names_no_field():
+    item = dict(
+        anomaly(key="unattributed_subagents", subject="subagent lane"),
+        action="These runs were dispatched without subagent_type, or by a plugin whose agents are "
+        "not on disk. Name the type at the dispatch site.",
+    )
+    assert "subagent_type" not in report.anomaly_action_text(item)
+    assert "without naming an agent type" in report.anomaly_action_text(item)

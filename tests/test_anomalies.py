@@ -351,7 +351,7 @@ def unattributed_records(unnamed, named):
 def test_mostly_unattributed_subagent_spend_is_an_anomaly():
     items = found(unattributed_records(7, 3), key=UNATTRIBUTED)
     assert len(items) == 1
-    assert "subagent_type" in items[0]["action"]
+    assert "without naming an agent type" in items[0]["action"]
 
 
 def test_subagent_spend_that_is_mostly_attributed_is_not_an_anomaly():

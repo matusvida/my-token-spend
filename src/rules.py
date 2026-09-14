@@ -1025,6 +1025,13 @@ def _failing_tool(records, settings):
     ]
 
 
+def unattributed_subagents_action():
+    return (
+        "These runs were dispatched without naming an agent type, or by a plugin whose agents are "
+        "not on disk. Name the type at the dispatch site."
+    )
+
+
 def _unattributed_subagents(records, settings):
     sidechain = [record for record in records if record["isSidechain"]]
     total = sum(record["weighted"] for record in sidechain)
@@ -1049,8 +1056,7 @@ def _unattributed_subagents(records, settings):
             },
             "%.0f%% of the subagent lane has no agent type" % (100 * share),
             share / settings["unattributed_share"],
-            "These runs were dispatched without subagent_type, or by a plugin whose agents are not on "
-            "disk. Name the type at the dispatch site.",
+            unattributed_subagents_action(),
             _field_coverage(records, "attributionAgent", sidechain),
             _bars(
                 [
