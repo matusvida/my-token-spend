@@ -190,6 +190,7 @@ def normalize(entry, config):
         "cache_create_1h": _optional_int(split.get("ephemeral_1h_input_tokens")),
         "compacted": message.get("context_management") is not None,
         "cwd": entry.get("cwd"),
+        "entrypoint": entry.get("entrypoint"),
         "gitBranch": entry.get("gitBranch"),
         "version": entry.get("version"),
         "thinking": int((usage.get("output_tokens_details") or {}).get("thinking_tokens") or 0),
@@ -267,6 +268,7 @@ def read_file(path, config, stored):
     last_prompt = stored.get("last_prompt") if resume else None
     carried_malformed = stored.get("malformed", 0) if resume else 0
     source_tool_use_id = stored.get("source_tool_use_id") if resume else None
+    prompt_source = stored.get("prompt_source") if resume else None
     after_compaction = bool(stored.get("pending_compaction")) if resume else False
     session_cost = stored.get("cost") if resume else None
 
@@ -310,6 +312,8 @@ def read_file(path, config, stored):
                 last_prompt = prompt
             if source_tool_use_id is None and entry.get("sourceToolUseID"):
                 source_tool_use_id = entry["sourceToolUseID"]
+            if prompt_source is None and entry.get("promptSource"):
+                prompt_source = entry["promptSource"]
             if entry.get("isCompactSummary"):
                 after_compaction = True
             for call_id, outcome in _tool_results(entry):
@@ -333,6 +337,7 @@ def read_file(path, config, stored):
 
     for record in records:
         record["source_tool_use_id"] = source_tool_use_id
+        record["prompt_source"] = prompt_source
 
     return {
         "records": records,
@@ -343,6 +348,7 @@ def read_file(path, config, stored):
             "last_prompt": last_prompt,
             "malformed": carried_malformed + malformed,
             "source_tool_use_id": source_tool_use_id,
+            "prompt_source": prompt_source,
             "pending_compaction": after_compaction,
             "cost": session_cost,
         },

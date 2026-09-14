@@ -259,3 +259,29 @@ def test_a_main_session_turn_has_no_spawning_call(tmp_path):
     f = tmp_path / "a.jsonl"
     write(f, [assistant_line("u1")])
     assert collect.read_file(f, CONFIG, None)["records"][0]["source_tool_use_id"] is None
+
+
+def test_every_turn_carries_the_prompt_source_of_the_first_user_entry(tmp_path):
+    f = tmp_path / "a.jsonl"
+    first = json.dumps({"type": "user", "promptSource": "scheduled", "message": {"content": "go"}})
+    later = json.dumps({"type": "user", "promptSource": "typed", "message": {"content": "again"}})
+    write(f, [first, assistant_line("u1"), later, assistant_line("u2")])
+    assert [r["prompt_source"] for r in collect.read_file(f, CONFIG, None)["records"]] == [
+        "scheduled",
+        "scheduled",
+    ]
+
+
+def test_the_prompt_source_survives_an_incremental_resume(tmp_path):
+    f = tmp_path / "a.jsonl"
+    first = json.dumps({"type": "user", "promptSource": "scheduled", "message": {"content": "go"}})
+    write(f, [first, assistant_line("u1")])
+    state = collect.read_file(f, CONFIG, None)["state"]
+    write(f, [first, assistant_line("u1"), assistant_line("u2")])
+    assert collect.read_file(f, CONFIG, state)["records"][0]["prompt_source"] == "scheduled"
+
+
+def test_a_session_with_no_prompt_source_records_none(tmp_path):
+    f = tmp_path / "a.jsonl"
+    write(f, [assistant_line("u1")])
+    assert collect.read_file(f, CONFIG, None)["records"][0]["prompt_source"] is None
