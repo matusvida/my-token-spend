@@ -1184,7 +1184,12 @@ def _finding_subject(finding):
     return subject[:8] if len(subject) > 20 else subject
 
 
+IDENTIFIER = re.compile(r"^\S*[:_]")
+
+
 def _sentence_case(text):
+    if IDENTIFIER.match(text):
+        return text
     return text[:1].upper() + text[1:]
 
 
