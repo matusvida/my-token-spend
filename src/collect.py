@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import context
 import cost
+import delta
 import quota
 import rules
 
@@ -190,6 +191,7 @@ def normalize(entry, config):
         "cache_create_1h": _optional_int(split.get("ephemeral_1h_input_tokens")),
         "compacted": message.get("context_management") is not None,
         "cwd": entry.get("cwd"),
+        "entrypoint": entry.get("entrypoint"),
         "gitBranch": entry.get("gitBranch"),
         "version": entry.get("version"),
         "thinking": int((usage.get("output_tokens_details") or {}).get("thinking_tokens") or 0),
@@ -267,6 +269,7 @@ def read_file(path, config, stored):
     last_prompt = stored.get("last_prompt") if resume else None
     carried_malformed = stored.get("malformed", 0) if resume else 0
     source_tool_use_id = stored.get("source_tool_use_id") if resume else None
+    prompt_source = stored.get("prompt_source") if resume else None
     after_compaction = bool(stored.get("pending_compaction")) if resume else False
     session_cost = stored.get("cost") if resume else None
     session_costs = []
@@ -320,6 +323,8 @@ def read_file(path, config, stored):
                 last_prompt = prompt
             if source_tool_use_id is None and entry.get("sourceToolUseID"):
                 source_tool_use_id = entry["sourceToolUseID"]
+            if prompt_source is None and entry.get("promptSource"):
+                prompt_source = entry["promptSource"]
             if entry.get("isCompactSummary"):
                 after_compaction = True
             for call_id, outcome in _tool_results(entry):
@@ -343,6 +348,7 @@ def read_file(path, config, stored):
 
     for record in records:
         record["source_tool_use_id"] = source_tool_use_id
+        record["prompt_source"] = prompt_source
 
     return {
         "records": records,
@@ -353,6 +359,7 @@ def read_file(path, config, stored):
             "last_prompt": last_prompt,
             "malformed": carried_malformed + malformed,
             "source_tool_use_id": source_tool_use_id,
+            "prompt_source": prompt_source,
             "pending_compaction": after_compaction,
             "cost": session_cost,
         },
@@ -605,6 +612,7 @@ def aggregate_window(
     samples=None,
     costs=None,
     owned_sessions=None,
+    previous_window=None,
     booked_cost=None,
 ):
     tz = zone(config)
@@ -640,7 +648,7 @@ def aggregate_window(
         bucket["count"] += 1
         bucket["weighted_cost"] += finding["weighted_cost"]
 
-    return {
+    aggregate = {
         "schema_version": SCHEMA_VERSION,
         "analysis_version": rules.ANALYSIS_VERSION,
         "generated_at": now.isoformat(),
@@ -684,9 +692,12 @@ def aggregate_window(
         ),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
+        "anomalies": rules.anomalies(records, config),
         "ceiling": ceiling_state,
         "parse": dict(parse_stats, records=len(records)),
     }
+    aggregate["delta"] = delta.block(previous_window, aggregate)
+    return aggregate
 
 
 def headroom_context(block, key, weighted, previous_weighted, samples, start_utc, end_utc, now):
@@ -924,6 +935,17 @@ def _prune_window(store_dir, data_dir, reports_dir, key):
             path.unlink()
 
 
+def _previous_aggregate(ordered, start, produced, data_dir):
+    index = ordered.index(start) if start in ordered else -1
+    if index <= 0:
+        return None
+    earlier = ordered[index - 1]
+    if earlier in produced:
+        return produced[earlier]
+    stored = _load_json(data_dir / (window_key(date.fromisoformat(earlier)) + ".json"), None)
+    return stored or None
+
+
 def _finalize(
     stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None, costs=None,
     extra_windows=(),
@@ -951,6 +973,7 @@ def _finalize(
     written = []
     extra = []
     owned = cost.sessions_by_window(windows)
+    produced = {}
     owning_window = {session: start for start, sessions in owned.items() for session in sessions}
     booked = cost.booked_windows(
         costs or {},
@@ -975,8 +998,10 @@ def _finalize(
             costs=costs,
             owned_sessions={r["sessionId"] for r in records},
             booked_cost=booked.get(start, {"usd": 0.0, "sessions": set(), "crossing": set()}),
+            previous_window=_previous_aggregate(ordered, start, produced, data_dir),
         )
         key = aggregate["window"]["key"]
+        produced[start] = aggregate
         _write_json(data_dir / (key + ".json"), aggregate)
         (reports_dir / (key + ".md")).write_text(render_markdown(aggregate), encoding="utf-8")
         (written if requested else extra).append(aggregate)

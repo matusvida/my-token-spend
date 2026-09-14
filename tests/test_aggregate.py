@@ -302,3 +302,44 @@ def test_context_growth_is_aggregated_per_session_for_the_report():
     assert block["sessions"][0]["session"] == "s1"
     assert block["sessions"][0]["growth_by_tool"][0]["tool"] == "Bash"
     assert block["coverage"]["share"] == 1.0
+
+
+def window_of(start, records, previous=None):
+    return collect.aggregate_window(start, records, CONFIG, STATS, None, previous_window=previous)
+
+
+def busy(day, turns, output=1000, cwd="C:\a"):
+    return [
+        rec("2026-08-%02dT%02d:%02d:00+00:00" % (day, 8 + index // 60, index % 60), output=output, cwd=cwd)
+        for index in range(turns)
+    ]
+
+
+def test_the_window_stores_its_anomalies():
+    window = window_of(date(2026, 8, 22), busy(25, 5))
+    assert window["anomalies"] == []
+
+
+def test_the_first_window_on_record_has_nothing_to_compare_against():
+    block = window_of(date(2026, 8, 22), busy(25, 5))["delta"]
+    assert block["comparable"] is False
+    assert block["previous"] is None
+    assert "no previous window to compare" in block["reason"]
+
+
+def test_a_previous_window_under_a_hundred_turns_is_not_comparable():
+    previous = window_of(date(2026, 8, 15), busy(18, 20))
+    block = window_of(date(2026, 8, 22), busy(25, 200), previous=previous)["delta"]
+    assert block["comparable"] is False
+    assert "only 20 turns" in block["reason"]
+
+
+def test_a_comparable_previous_window_stores_rows_a_total_and_a_claim():
+    previous = window_of(date(2026, 8, 15), busy(18, 150, output=100))
+    block = window_of(date(2026, 8, 22), busy(25, 150, output=1000), previous=previous)["delta"]
+    assert block["comparable"] is True
+    assert block["previous"] == "week_2026_08_15"
+    assert block["rows"]
+    assert block["total"] > 0
+    assert round(block["accounted"]) == round(block["total"])
+    assert block["claim"].endswith(".")

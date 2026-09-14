@@ -125,7 +125,6 @@ def test_the_recommendations_table_names_the_basis_of_every_figure():
     rows = html.split("<summary>Numbers</summary>")[-1]
     assert "<th>basis</th>" in rows
     assert "<td>headroom</td>" in rows
-    assert "<td>saving</td>" in rows
 
 
 def test_the_delta_decomposition_ignores_the_headroom_finding():

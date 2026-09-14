@@ -223,3 +223,11 @@ def test_a_tool_call_keeps_the_id_the_result_will_be_joined_on():
     e = entry()
     e["message"]["content"] = [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]
     assert collect.normalize(e, CONFIG)["tools"][0]["tool_use_id"] == "toolu_1"
+
+
+def test_the_entrypoint_of_a_turn_is_captured():
+    assert collect.normalize(entry(entrypoint="sdk-cli"), CONFIG)["entrypoint"] == "sdk-cli"
+
+
+def test_a_turn_without_an_entrypoint_records_none():
+    assert collect.normalize(entry(), CONFIG)["entrypoint"] is None

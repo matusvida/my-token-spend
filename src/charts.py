@@ -331,7 +331,7 @@ def svg_diverging_bars(rows, label_width=330, row_height=36):
             '<path class="mark" d="%s" fill="var(%s)" tabindex="0" data-tip="%s"/>'
             % (
                 _horizontal_bar(centre, y, length, bar_height, CORNER, not increased),
-                "--delta-up" if increased else "--delta-down",
+                row.get("color") or ("--delta-up" if increased else "--delta-down"),
                 esc(row["tip"]),
             )
         )

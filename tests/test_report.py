@@ -342,13 +342,12 @@ def test_render_html_carries_the_headline_numbers_and_theme_blocks():
     assert "prefers-color-scheme: dark" in html
     assert '[data-theme="dark"]' in html
     assert "week_2026_08_22" in html
-    assert "percent of ceiling" in html.lower()
 
 
 def test_render_html_without_a_previous_window_still_renders():
     windows = [make_window()]
     html = report.render_html(windows, windows[0])
-    assert "nothing to compare against" in html
+    assert "no previous window to compare" in html
 
 
 def test_render_html_states_the_precedence_and_the_overlap_warning():
@@ -667,40 +666,16 @@ def recommendation(kind="model_downgrade", group="waste", saving=96200374.0, ris
     }
 
 
-def test_recommendations_section_renders_all_three_groups():
-    windows = [make_window()]
-    html = report.render_html(
-        windows,
-        windows[0],
-        recommendations=[
-            recommendation(),
-            recommendation("right_size_agent_tier", "strategy", 15584734.0, "low", "medium"),
-            recommendation("reset_context", "hygiene", 70334762.0, "low", "medium"),
-        ],
-    )
-    assert "Waste - cut it" in html
-    assert "tune it, never cut it" in html
-    assert "Hygiene - cheap habits" in html
-    assert "no performance risk" in html
-    assert "high confidence" in html
-
-
-def test_recommendations_section_refuses_to_show_a_total():
+def test_the_page_never_shows_a_total_saving():
     windows = [make_window()]
     html = report.render_html(windows, windows[0], recommendations=[recommendation()])
-    assert "never added into a total" in html
+    assert "never added together" in html
     assert "total savings" not in html.lower()
-
-
-def test_recommendations_section_states_its_absence():
-    windows = [make_window()]
-    html = report.render_html(windows, windows[0], recommendations=[])
-    assert "No rule produced a recommendation" in html
 
 
 def test_render_html_still_works_without_recommendations():
     windows = [make_window()]
-    assert "Recommendations" in report.render_html(windows, windows[0])
+    assert "Do these first" in report.render_html(windows, windows[0])
 
 
 def test_recommendation_action_backticks_become_inline_code():
@@ -1131,21 +1106,6 @@ def storm_window(records=None, subject="s1", start="2026-08-22", is_current=True
     return window, records
 
 
-def test_the_page_reads_verdict_then_actions_then_findings_then_centres_then_raw():
-    window, records = storm_window()
-    windows = [window]
-    html = report.render_html(windows, window, recommendations=[recommendation()], analysis=analysed(window, records))
-    order = [
-        html.index('<section class="card verdict">'),
-        html.index("<h2>Do these first</h2>"),
-        html.index("<h2>Findings</h2>"),
-        html.index("<h2>Cost centres</h2>"),
-        html.index("<h2>Raw breakdowns</h2>"),
-        html.index("<h2>Recommendations</h2>"),
-    ]
-    assert order == sorted(order)
-
-
 def test_the_list_price_tile_states_its_session_count_and_boundary_crossers():
     window, records = storm_window()
     window["cost_usd"] = {
@@ -1186,31 +1146,30 @@ def test_the_actions_name_a_threshold_and_link_to_their_chart():
     assert "Cost is not waste" in actions
 
 
-def test_the_actions_list_at_most_three():
+def test_the_actions_list_at_most_two_new_cards():
     window, records = storm_window()
     many = [recommendation(kind="k%d" % index, saving=1000.0 * (10 - index)) for index in range(5)]
     for index, item in enumerate(many):
         item["title"] = "action number %d" % index
+        item["percent_of_window"] = 30.0 - index
     html = report.render_html([window], window, recommendations=many, analysis=analysed(window, records))
     actions = html.split("<h2>Do these first</h2>")[1].split("</section>")[0]
-    assert actions.count("action number") == 3
+    assert actions.count("action number") == 2
     assert "action number 3" not in actions
 
 
-def test_the_actions_state_when_nothing_cleared_the_threshold():
+def test_the_actions_state_when_nothing_is_new():
     window, records = storm_window()
     html = report.render_html([window], window, recommendations=[], analysis=analysed(window, records))
-    assert "No rule cleared the reporting threshold this window" in html
+    assert "Nothing new this week" in html
 
 
 RAW_PANELS = (
     "Every window, main agent vs subagents",
-    "Week-over-week change, decomposed by cause",
     "Burn inside this window",
     "Where this window went",
     "Top sessions",
     "Whale turns",
-    "Headline tiles",
 )
 
 

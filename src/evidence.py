@@ -325,6 +325,8 @@ def cards(window, records, config, agent_calls=None):
                     )
                 )
             continue
+        if rule == "whale_turns":
+            continue
         findings = [finding for _, finding in entries]
         if rule == "model_mismatch":
             chart = _mismatch_chart(records, config)
@@ -387,21 +389,10 @@ def lanes(window, records, config, agent_calls=None):
             "recorded on %s" % _share_text(coverage.get("mcp_server")),
         ),
         (
-            "Plugins",
-            window.get("by_plugin") or [],
-            "recorded on %s" % _share_text(coverage.get("plugin")),
-        ),
-        (
             "Skills",
             window.get("by_skill") or [],
             "recorded on %s" % _share_text(_coverage(records, "attributionSkill")),
         ),
-        (
-            "Repos",
-            window.get("by_repo") or [],
-            "recorded on %s" % _share_text(_coverage(records, "cwd")),
-        ),
-        ("Models", window.get("by_model") or [], "recorded on every turn"),
     ):
         built.append(_lane(name, entries, note))
     return built

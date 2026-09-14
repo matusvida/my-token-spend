@@ -492,24 +492,41 @@ self-contained HTML page. The reading path is, in order:
    ceiling came from a usage sample or a config override, and *estimated ceiling* otherwise, so it
    never contradicts the tile above it. The axis runs over every calendar day from the window start,
    zero-filled, because `by_day` holds only days with spend.
-2. **Do these first** — at most three cards, each one claim, the threshold it was counted at, one
-   number, a risk and a confidence badge, and a link to its finding's chart. The overlap notice
-   appears here, once.
-3. **Why this week looked like this** — the narrative, capped at four sentences and 90 words. When
-   no narrative exists neither the heading nor the section is rendered; the header meta line carries
-   one notice instead, naming what writes one, the `claude` CLI on PATH.
-4. **Findings** — one card per finding group, carrying exactly one chart or table as its evidence.
-   Everything else, the root-cause line included, sits behind a `<details>`.
-5. **Cost centres** — one ranked bar chart per lane: jobs by dispatch description where recovered,
-   MCP servers, plugins, skills, repos, models. Each footer states the coverage of the field its lane
-   groups by. Clusters carrying a recovered label hold the head of the jobs ranking; every other
-   cluster groups by agent type and repo into a bar reading *"31 more general-purpose runs in
-   product-promotion-service"*, drawn in the derived colour the legend names. The lane draws the six
-   largest such groups and its footer says how many it left out.
-6. **Raw breakdowns** — every earlier section, collapsed and unchanged.
-7. **Recommendations** — the existing grouping, plus a `headroom` group that renders only when a
-   recommendation of that kind exists. Each group carries an `id="rec-<group>"` anchor, shows its two
-   largest cards and folds the rest into a `<details>`.
+2. **What changed** — the week-over-week decomposition, read from the window's stored `delta`
+   block. One diverging bar per repo × lane slice, each bar coloured by the cause the disjoint
+   `CAUSE_PRECEDENCE` assigned it, largest absolute movement first, at most eight bars plus an
+   *everything else* bar carrying the count. Above the chart sits a sentence generated from the
+   rows, naming the largest movement and its share of the gross movement; under it the accounting
+   line, *"+800.8M accounted, +800.8M total"*. When there is no earlier window, or the earlier one
+   holds fewer than `delta.MIN_PREVIOUS_TURNS` (100) turns, the block is one line saying so.
+3. **Why this week looked like this** — the narrative, capped at four sentences and 90 words, and
+   handed the delta claim and the anomaly claims as its context. When no narrative exists neither the
+   heading nor the section is rendered; the header meta line carries one notice instead, naming what
+   writes one, the `claude` CLI on PATH.
+4. **What looks wrong** — the anomaly lane, read from the window's stored `anomalies`. At most
+   `report.ANOMALY_CARDS` (5) cards, ranked by score, and a line counting the rest. Each card is a
+   claim with its measured numbers, one chart or table, the concrete action, and the coverage of the
+   field the detector read. A window with no anomaly prints one line.
+5. **Findings** — one card per finding group worth at least `report.FINDING_CARD_SHARE` (1%) of the
+   window, carrying exactly one chart or table as its evidence. Everything else, the root-cause line
+   included, sits behind a `<details>`; smaller findings are counted in a line and keep their rows in
+   the rule lenses.
+6. **Cost centres** — one ranked bar chart per lane: jobs by dispatch description where recovered,
+   MCP servers, skills. Each footer states the coverage of the field its lane groups by. Clusters
+   carrying a recovered label hold the head of the jobs ranking; every other cluster groups by agent
+   type and repo into a bar reading *"31 more general-purpose runs in product-promotion-service"*,
+   drawn in the derived colour the legend names. The lane draws the six largest such groups and its
+   footer says how many it left out.
+7. **Do these first** — two blocks. *Last week's advice* is one row per recommendation the previous
+   window produced: the title, its share of that window, its share of this one, and the movement in
+   points, reading *unchanged* within `report.UNCHANGED_POINTS` (±2). The rows are read by running
+   `advice.recommend` over the previous window's stored aggregate, never off the rendered page, and
+   the four largest movements are drawn. *New this week* holds at most `report.NEW_CARDS` (2) cards,
+   for recommendations that were absent last week or grew by more than `report.GROWN_POINTS` (5)
+   points; when nothing qualifies it is one line. The overlap notice appears here, once.
+8. **Raw breakdowns** — the remaining lenses, collapsed.
+9. **Quota you did not use** — the `headroom` group, rendered only when a recommendation of that
+   kind exists, carrying its `id="rec-headroom"` anchor.
 
 **Under-spend is not a cause of spend.** The `headroom` finding's `weighted_cost` is the quota that
 expired unused, so it would lead every cost ranking on the page. It is excluded from the findings
@@ -528,9 +545,10 @@ run timeline labelled with the orchestrator's descriptions, so overlap is visibl
 is a strip of output tokens against thinking tokens, coloured by model, with the counted region drawn
 as a box and its criteria stated in the top-right corner. Tool count is not an axis: the rule admits
 exactly one tool call, so plotting it would imply a spread that does not exist.
-`agent_type_skew` is a bar per job cluster with the no-run-id residual as its own bar. `whale_turns`
-decomposes the costliest turns by token class. `redundant_reads`, `loop_retry` and the round-trip
-detectors get tables.
+`agent_type_skew` is a bar per job cluster with the no-run-id residual as its own bar.
+`redundant_reads`, `loop_retry` and the round-trip detectors get tables. `whale_turns` keeps its rule
+and its collapsed table in the raw breakdowns, but has no finding card: ten near-equal bars conveyed
+nothing a sentence did not.
 
 **A chart that draws a sample says so.** A session's context series is one point per turn that
 carried context, downsampled to `context.SERIES_POINTS` (300) bins; each bin keeps its largest point
@@ -551,14 +569,15 @@ every label, and where that still leaves duplicates it re-elides within the coll
 falls back to appending each row's start clock. Run timelines, the deep-dive cluster tables and the
 collapsed recommendations overview all go through it.
 
-**Word budget.** Visible text outside `<details>` is capped at 1,500 words, measured by
-`report.visible_words`, which drops every `<details>` body but keeps its `<summary>`, and counts the
-text inside the SVG charts like any other. A test renders a real-shaped fixture window through
-`collect.aggregate_window` and fails above the cap. Three things hold the budget on a busy window:
-the narrative is clipped to `NARRATIVE_WORDS` (90) at render time as well as asked for in the
-prompt, each recommendation group shows its three largest cards and folds the rest into a
-`<details>`, and every chart caps its visible rows — the collapsed remainder is always stated, never
-dropped.
+**Word budget.** Visible prose outside `<details>` is capped at 1,100 words, measured by
+`report.visible_words`, which drops every `<details>` body but keeps its `<summary>`, and drops the
+text inside the SVG charts: axis ticks and bar labels are chart furniture, and counting them charged
+the page for drawing the evidence the design asks for. A test renders a real-shaped fixture window
+through `collect.aggregate_window` and fails above the cap. Four things hold the budget on a busy
+window: the narrative is clipped to `NARRATIVE_WORDS` at render time as well as asked for in the
+prompt, findings below 1% of the window fall back to the rule lenses, the anomaly lane and the
+new-advice cards are capped at five and two, and every chart caps its visible rows — the collapsed
+remainder is always stated, never dropped.
 
 `evidence.py` holds the per-card chart payloads and the lane rankings, and `charts.py` the SVG
 geometry; `report.py` is left with page assembly. `evidence.build` is attached to the root-cause
@@ -1008,7 +1027,6 @@ One recommendation kind per producer. `cost` below is a finding's `weighted_cost
 | `right_size_agent_tier` | strategy | agent-type skew | `cost * expensive_model_share * downgrade_factor`, and only for agents named in `advice.sonnet_class_agents`. |
 | `right_size_fan_out` | strategy | subagent storm | `sum over oversized storms of cost * (1 - median_turns / storm_turns)` — the cost of bringing only the above-median storms back to the median. |
 | `reset_context` | hygiene | context bloat | `sum(cost)` over every bloated session. |
-| `split_whale_turns` | hygiene | whale turns | `sum over oversized whales of (cost - median_cost)` — the excess of the biggest turns over the median whale. |
 | `upgrade_tier` | headroom | headroom | Not a saving. `weighted_headroom = component_weighted * (opus_weight / current_weight - 1)`, for a component whose definition file declares `model: sonnet` or `haiku` and whose runs show the judgement profile. Offered only when it fits inside the unused quota. |
 | `widen_fan_out` | headroom | headroom | Not a saving. `weighted_headroom` is the median weighted cost of one run in the session, which is what one more parallel lane of comparable work costs. Offered only when it fits inside the unused quota. |
 | `extra_usage_unused` | headroom | headroom | Neither a saving nor a price. One line stating the untouched overage budget in its own currency, with no action attached. |
@@ -1032,9 +1050,9 @@ expensive_model_share = (weighted spent on models priced above the downgrade mod
 `right_size_agent_tier` multiplies by both because only part of the window ran on an
 expensive model, and moving down recovers only the price gap, not the whole cost.
 
-The median rules refuse to fire on too small a sample: `min_storms_for_median` and
-`min_whales_for_median` (4 each) findings are required, and a population where
-nothing exceeds the median produces nothing.
+The median rule refuses to fire on too small a sample: `min_storms_for_median` (4)
+findings are required, and a population where nothing exceeds the median produces
+nothing.
 
 ### Filtering and ranking
 
@@ -1059,7 +1077,6 @@ Each kind carries a fixed risk and confidence, which is what the score above use
 | `break_retry_loops` | none | medium |
 | `reset_context` | low | medium |
 | `right_size_agent_tier` | low | medium |
-| `split_whale_turns` | low | low |
 | `right_size_fan_out` | medium | low |
 | `upgrade_tier` | none | low |
 | `widen_fan_out` | medium | low |
@@ -1410,6 +1427,46 @@ promote a component that is usually cheap. A centre seen in fewer than `min_wind
 (2) windows is labelled `one-off, not a pattern` and can never drive a config change. Analysing a
 single window is still possible and lowers that floor to 1, but the output says the proposal is
 fitted to one week.
+
+
+## Anomalies
+
+The findings rank a window by weighted cost. That buries behaviour: a ten-minute loop that issued the
+same shell command 101 times is worth 1.9M and lands below an expensive but entirely ordinary storm.
+`rules.anomalies` is the second lens, and it ranks by strangeness instead.
+
+Six detectors, each with its thresholds under `anomalies` in `config.json`:
+
+| detector | fires when | score basis |
+|---|---|---|
+| `reply_skill_headless` | a skill from `reply_skills` spends more than `reply_headless_share` of its weighted tokens inside headless sessions | that share |
+| `repeated_tool_input` | one tool and input hash repeat more than `repeat_min` times within `repeat_minutes` inside one run | repeats a minute |
+| `context_growth_tool` | one tool is more than `growth_share` of a session's context growth over at least `growth_min_results` results, and its median result clears `result_kb` or its total clears `growth_total_mb` | share times whichever gate fired |
+| `failing_tool` | more than `fail_min` failed calls in the window with one tool above `fail_dominant_share` of them | the failure count |
+| `unattributed_subagents` | more than `unattributed_share` of subagent weighted spend carries no agent type | that share |
+| `mcp_server_share` | one MCP server is above `mcp_share` of the window | that share |
+
+**A session is headless when nothing reads the reply.** `rules.headless_sessions` marks a session by
+its modal `cwd` sitting under one of `headless_cwds`, by any turn whose `entrypoint` is in
+`headless_entrypoints`, or by a first user entry whose `promptSource` is in
+`headless_prompt_sources`. `collect.normalize` keeps `entrypoint` per turn and `collect.read_file`
+carries the session's first `promptSource` onto every record of the file, the way it already carries
+the spawning tool call.
+
+**The score is a multiple of the detector's own threshold.** The six quantities are shares, counts
+and rates, and no common unit exists between them. Dividing each by the threshold it had to clear
+gives one dimensionless number that means the same thing for every detector: how far outside its own
+normal this window sits. Each card also carries the quantity in its own words, so the ranking never
+hides what it measured.
+
+**Context growth fires on volume as well as size.** The size gate alone misses the shape that
+actually fills a context: on the heaviest window on record, `Bash` is 67% of one session's growth
+over 2,129 results and 6.2 MB, at a median of 1 KB each. A tool that hands back megabytes in small
+pieces is the same problem as one that hands back a few large ones.
+
+**Every card names something on disk.** A skill file and the project whose settings can exclude it, a
+run by the description it was dispatched with, a tool, a server. A card that could only say *this
+looks odd* would be a stat, not an action.
 
 ## Cost centres
 
