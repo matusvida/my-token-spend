@@ -740,11 +740,13 @@ The first backfill run computes weighted totals for every historical window,
 windows whose totals cluster at the top of the observed distribution are treated
 as windows where the cap was approached, and the ceiling is derived from that
 cluster. It is an estimate of a habit, not a quota, and every place that shows
-it says so. When any quota sample exists at all, the estimate is labelled
-*estimate, likely low* and states the floor that sample already implies: a single
-utilization reading bounds the real ceiling from below at `spent / utilization`,
-so an estimate under that floor is known to be too small before anything else is
-measured.
+it says so. When a quota sample carries at least the fit's
+`min_pct` utilization, the estimate is labelled *estimate, likely low* and states
+the floor that sample already implies: a single utilization reading bounds the
+real ceiling from below at `spent / utilization`, so an estimate under that floor
+is known to be too small before anything else is measured. Readings below
+`min_pct` imply nothing, because dividing by a small utilization amplifies its
+rounding into the implied ceiling.
 
 **One ceiling, applied everywhere, and a page that says when it moved.** The
 ceiling is computed once per `collect` run over every window, so a closed window
@@ -948,7 +950,7 @@ ceiling
   latest_pct_is_fresh    true when that sample is younger than fresh_hours
   percent_used           null when no estimate exists
   percent_used_source    quota-sample | ceiling-estimate
-  floor                  spent / utilization from the best quota sample, or null
+  floor                  spent / utilization from the best sample at or above min_pct, or null
   floor_spent            the weighted spend behind that floor
   floor_pct              the utilization behind that floor
   burn_rate_per_day      weighted / elapsed_days

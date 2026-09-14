@@ -280,3 +280,36 @@ def test_a_fitted_ceiling_that_barely_moved_stays_quiet():
 
     stamp = {"ceiling": 3.10e9, "ceiling_method": "quota-fit"}
     assert report.ceiling_change_note(stamp, _fitted(3.101e9)) is None
+
+
+def test_a_low_percentage_sample_implies_no_floor():
+    totals = {"a": 100.0, "b": 200.0, "c": 300.0}
+    ceiling = collect.estimate_ceiling(
+        totals, CONFIG, samples=[sample(24, 1.0, 5000000.0)], instants=INSTANTS, now=NOW
+    )
+    assert ceiling["method"] == "top-cluster"
+    assert ceiling["floor"] is None
+    assert "likely low" not in collect.ceiling_method_text(ceiling)
+
+
+def test_a_loud_low_percentage_sample_never_outbids_a_usable_one():
+    totals = {"a": 100.0, "b": 200.0, "c": 300.0}
+    ceiling = collect.estimate_ceiling(
+        totals,
+        CONFIG,
+        samples=[sample(24, 50.0, 700000.0), sample(20, 0.5, 5000000.0)],
+        instants=INSTANTS,
+        now=NOW,
+    )
+    assert ceiling["floor"] == pytest.approx(1400000.0)
+    assert ceiling["floor_pct"] == 50.0
+
+
+def test_the_floor_uses_the_same_minimum_percentage_as_the_fit():
+    config = copy.deepcopy(CONFIG)
+    config["ceiling"]["quota_fit"] = {"min_pct": 60}
+    totals = {"a": 100.0, "b": 200.0, "c": 300.0}
+    ceiling = collect.estimate_ceiling(
+        totals, config, samples=[sample(24, 50.0, 700000.0)], instants=INSTANTS, now=NOW
+    )
+    assert ceiling["floor"] is None

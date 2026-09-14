@@ -484,15 +484,15 @@ def estimate_ceiling(window_totals, config, samples=None, instants=None, now=Non
         "approximate": True,
         "cluster_size": size,
         "windows_considered": len(window_totals),
-        **sample_floor(samples or []),
+        **sample_floor(samples or [], quota_fit_settings(config)["min_pct"]),
     }
 
 
-def sample_floor(samples):
+def sample_floor(samples, min_pct):
     best = None
     for entry in samples:
         pct, weighted = entry.get("seven_day_pct"), entry.get("weighted_so_far")
-        if not pct or not weighted or pct <= 0:
+        if not pct or not weighted or pct < min_pct:
             continue
         implied = float(weighted) / (float(pct) / 100.0)
         if best is None or implied > best["floor"]:
