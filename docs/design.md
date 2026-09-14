@@ -55,11 +55,13 @@ contradicts any of them is a bug, whatever else it improves.
 
 ### `tune` proposes and never applies
 
-7. **No `tune` code path may write to any agent, skill or `CLAUDE.md` file.** `tune.py` and
-   `rules.py` contain no file-writing call at all — no `write_text`, `write_bytes`,
-   `os.replace`, `shutil.*`, `unlink`, `mkdir`, and no `open()` except for reading. Running `tune`
-   must leave every file under `~/.claude` byte-identical, and must write nothing into the data
-   home either.
+7. **`tune` writes nothing outside `data/tune_last.json`.** That one file in the data home holds the
+   proposals and figures of the last run, so the next run can say what moved. `rules.py`,
+   `agentfiles.py` and `advice.py` contain no file-writing call at all — no `write_text`,
+   `write_bytes`, `os.replace`, `shutil.*`, `unlink`, `mkdir`, and no `open()` except for reading —
+   and `tune.py` contains exactly one, inside `save_state`, targeting that path. Running `tune` must
+   leave every file under `~/.claude` byte-identical, and must touch no other file in the data home:
+   never a config, an agent definition, a skill or a window aggregate.
 8. **No auto-apply flag may be added.** `tune` proposes a *patch as text*; the user applies it. Any
    flag whose name contains `apply`, `write` or `fix` is forbidden by construction. The `--json`
    form must keep stating `applies_changes: false`.
@@ -1365,9 +1367,10 @@ fitted to one week.
 
 Agents and skills are one kind of thing. Both resolve to files, both carry a per-run cost - per
 `agentId` for agents, per session for skills, since a skill has no invocation id in the data - and a
-median wall-clock per run. Skills additionally report their file size and description length as
-figures, with no conclusion drawn from either: a character count is not evidence that a skill loaded
-on turns that did not need it. Skill and plugin names are grouped by their
+median wall-clock per run. Skills additionally report their description length as a figure, with no
+conclusion drawn from it: a character count is not evidence that a skill loaded on turns that did
+not need it. A byte count says even less, so the file size is not reported at all. Skill and plugin
+names are grouped by their
 `plugin:` prefix into a per-plugin total. No skill ever gets a modelled saving: its attributed cost
 is the cost of the work done under it, not the cost of loading it.
 
@@ -1385,6 +1388,30 @@ rule, the component cleared the same `min_windows_for_proposal` floor a downgrad
 the priced increase fits inside the unused quota. It renders as its own section that states it
 spends rather than saves, and it emits the same kind of unified diff a downgrade does. A component
 on neither list is `NOT_ASSESSABLE` with its cost shown and no verdict either way.
+
+## The decisions section
+
+A component on neither class list is the one thing `tune` cannot resolve on its own, and it used to
+surface as a refusal buried among dozens of cost entries. It is now the first section of the output.
+Every agent type above `min_cost` that is on neither list is listed with its typical window cost, its
+run count, its median thinking per turn and its median output per turn — the four figures a reader
+needs to judge whether the work is judgement work — and with the exact `config.json` line that adds
+it to either list. The section closes by saying that classifying them lets the next run price them.
+The two per-turn medians come from the stored records, so an agent that ran in no loaded window
+shows zeroes rather than a guess.
+
+Two counts keep the rest of the output short. A setting-level proposal worth less than
+`min_saving_share` (1%) of a typical analysed window folds into one counted line instead of a card:
+its blast radius argument is longer than its figure is large. "Cost without a proposal" lists only
+components at or above `min_reported_share` (3%) of a typical window, and states how many cleared the
+weighted floor but not the share.
+
+## What moved since last run
+
+`tune` stores each run's proposals and their figures in `data/tune_last.json` and compares the next
+run against it: then, now, and whether an entry is new or no longer proposed. On the first run the
+section is one line. A moved figure is a moved estimate over different windows, not a measured
+saving, and the section says so.
 
 ## Wasted round trips
 
