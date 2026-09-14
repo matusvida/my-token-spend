@@ -2431,3 +2431,24 @@ def test_the_context_axis_labels_a_binned_point_by_its_carried_turn():
     assert "turn 1,908 (09/09 10:24)" in svg
     assert "turn 5,231 (09/11 16:53)" in svg
     assert "turn 2,617 (" not in svg
+
+
+def test_a_transport_failure_on_a_closed_window_is_asked_again_next_run(tmp_path, monkeypatch):
+    windows = two_windows()
+    data_dir = write_windows(str(tmp_path / "data"), windows)
+    report_dir = str(tmp_path / "reports")
+    argv = ["--data-dir", data_dir, "--report-dir", report_dir]
+    calls = []
+
+    def fake(prompt, timeout=180, model=None):
+        calls.append(prompt)
+        return None, "claude CLI not on PATH"
+
+    monkeypatch.setattr(report, "fetch_narrative", fake)
+    assert report.main(argv) == 0
+    assert len(calls) == 2
+    assert report.load_narratives(data_dir) == {}
+    downgrade_stamp(os.path.join(report_dir, "week_2026_08_15.html"))
+    assert report.main(argv) == 0
+    asked = [prompt.splitlines()[1] for prompt in calls]
+    assert sum(1 for line in asked if line.startswith("Window week_2026_08_15")) == 2

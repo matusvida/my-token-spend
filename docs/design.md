@@ -1306,7 +1306,10 @@ is to reduce token spend cannot fire nine of those three times a day, so:
 - **A window that has never been asked gets one call, once.** A closed window with no
   stored narrative and no recorded attempt is asked on the next render even without
   `--refresh-narrative`; the outcome, prose or refusal, is written to the sidecar, so the
-  call is never repeated. `--no-narrative` suppresses it.
+  call is never repeated. A failure to reach the model at all — no `claude` on PATH, a
+  timeout, a non-zero exit, an empty response — writes nothing, so the next render asks
+  again; otherwise one upgrade run without the CLI on PATH would silence every closed
+  window for good. `--no-narrative` suppresses it.
 - For a page written before the stamp existed, the narrative is recovered by reading
   the prose back out of the rendered `<p>` and `<li>` elements of the narrative section.
   This is a migration path for version-0 pages only; version-1 pages always use the

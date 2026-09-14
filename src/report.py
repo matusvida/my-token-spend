@@ -2303,6 +2303,13 @@ def narrative_off_note(note):
     return "narrative off: %s" % (note or "no narrative call has been made for this window")
 
 
+NARRATIVE_REFUSED = "narrative refused"
+
+
+def narrative_is_refusal(note):
+    return (note or "").startswith(NARRATIVE_REFUSED)
+
+
 def narrative_was_written(note):
     return note == NARRATIVE_WRITTEN or (note or "").startswith("narrative trimmed to ")
 
@@ -2529,7 +2536,7 @@ def rebuild_stale(
                 note = outcome
                 print("narrative skipped for %s: %s" % (key, outcome), file=sys.stderr)
             narrative = fresh or narrative
-            if fresh or not window["window"].get("is_current"):
+            if fresh or (not window["window"].get("is_current") and narrative_is_refusal(outcome)):
                 stored = store_narrative(data_dir, key, fresh, note)
         elif narrative and "narrative" not in entry:
             stored = store_narrative(data_dir, key, narrative, note)
@@ -2856,7 +2863,7 @@ def narrative_for(windows, target, config, recommendations=None, analysis=None, 
     accepted, note = accept_narrative(text)
     if accepted:
         return accepted, note
-    return None, "narrative refused twice (%d words)" % len(text.split())
+    return None, "%s twice (%d words)" % (NARRATIVE_REFUSED, len(text.split()))
 
 
 def rebuild_summary(rebuilt, windows):
@@ -2913,7 +2920,7 @@ def main(argv=None):
         elif outcome:
             narrative_note = outcome
             print("narrative skipped: %s" % outcome, file=sys.stderr)
-        if narrative or not target["window"].get("is_current"):
+        if narrative or (not target["window"].get("is_current") and narrative_is_refusal(outcome)):
             store_narrative(data_dir, target["window"]["key"], narrative, narrative_note)
 
     path = write_report(
