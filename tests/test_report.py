@@ -445,7 +445,7 @@ def test_narrative_absence_renders_no_heading_and_one_header_line():
     page = report.render_html(windows, windows[0], narrative=None, narrative_note="claude CLI not on PATH")
     assert "Why this week looked like this" not in page
     header = page.split("<header>")[1].split("</header>")[0]
-    assert "narrative off: claude not on PATH for the scheduled run" in header
+    assert "narrative off: claude not on PATH" in header
     assert page.count("narrative off:") == 1
 
 
@@ -587,7 +587,7 @@ def test_a_narrative_still_over_the_cap_after_the_retry_is_dropped(monkeypatch):
     monkeypatch.setattr(report, "fetch_narrative", lambda prompt, timeout=180, model=None: ("One. Two. Three. Four. Five.", None))
     text, error = report.narrative_for(windows, windows[0], CONFIG, recommendations=[])
     assert text is None
-    assert "sentences" in error
+    assert error == "narrative refused twice (5 words)"
 
 
 def test_console_summary_leads_with_the_budget_and_top_causes():
@@ -2113,3 +2113,103 @@ def test_a_session_label_repairs_a_double_encoded_prompt():
 
 def test_a_clean_session_label_is_left_alone():
     assert report.session_label({"first_prompt": "acting for Matúš Vida"}) == "acting for Matúš Vida"
+
+
+def test_the_header_says_the_narrative_was_written():
+    windows = [make_window()]
+    page = report.render_html(windows, windows[0], narrative="Subagents ate the week.",
+                              narrative_note=report.NARRATIVE_WRITTEN)
+    header = page.split("<header>")[1].split("</header>")[0]
+    assert "narrative written" in header
+
+
+def test_the_header_says_the_narrative_was_reused():
+    windows = [make_window()]
+    page = report.render_html(windows, windows[0], narrative="Subagents ate the week.",
+                              narrative_note=report.NARRATIVE_REUSED)
+    header = page.split("<header>")[1].split("</header>")[0]
+    assert "narrative reused" in header
+
+
+def test_the_header_never_says_a_narrative_is_off_without_a_reason():
+    windows = [make_window()]
+    header = report.render_html(windows, windows[0]).split("<header>")[1].split("</header>")[0]
+    assert "narrative off: no narrative call has been made for this window" in header
+    assert "none written for this run" not in header
+
+
+def test_a_closed_window_with_no_stored_narrative_gets_one_on_a_plain_rebuild(tmp_path, monkeypatch):
+    windows = two_windows()
+    data_dir = write_windows(str(tmp_path / "data"), windows)
+    report_dir = str(tmp_path / "reports")
+    argv = ["--data-dir", data_dir, "--report-dir", report_dir]
+    calls = []
+
+    def fake(prompt, timeout=180, model=None):
+        calls.append(prompt)
+        return "Subagents ate the week.", None
+
+    monkeypatch.setattr(report, "fetch_narrative", fake)
+    assert report.main(argv) == 0
+    page = Path(os.path.join(report_dir, "week_2026_08_15.html")).read_text(encoding="utf-8")
+    assert len(calls) == 2
+    assert "Subagents ate the week." in page
+    assert "narrative written" in page
+    assert report.load_narratives(data_dir)["week_2026_08_15"]["narrative"] == "Subagents ate the week."
+
+
+def test_a_stored_narrative_is_reused_without_a_second_call(tmp_path, monkeypatch):
+    windows = two_windows()
+    data_dir = write_windows(str(tmp_path / "data"), windows)
+    report_dir = str(tmp_path / "reports")
+    argv = ["--data-dir", data_dir, "--report-dir", report_dir]
+    calls = []
+
+    def fake(prompt, timeout=180, model=None):
+        calls.append(prompt)
+        return "Subagents ate the week.", None
+
+    monkeypatch.setattr(report, "fetch_narrative", fake)
+    assert report.main(argv) == 0
+    downgrade_stamp(os.path.join(report_dir, "week_2026_08_15.html"))
+    assert report.main(argv) == 0
+    page = Path(os.path.join(report_dir, "week_2026_08_15.html")).read_text(encoding="utf-8")
+    assert len(calls) == 3
+    assert "Subagents ate the week." in page
+    assert "narrative reused" in page
+
+
+def test_a_refusal_is_recorded_and_named_instead_of_being_retried(tmp_path, monkeypatch):
+    windows = two_windows()
+    data_dir = write_windows(str(tmp_path / "data"), windows)
+    report_dir = str(tmp_path / "reports")
+    argv = ["--data-dir", data_dir, "--report-dir", report_dir]
+    calls = []
+
+    def fake(prompt, timeout=180, model=None):
+        calls.append(prompt)
+        return "One. Two. Three. Four. Five. Six.", None
+
+    monkeypatch.setattr(report, "fetch_narrative", fake)
+    assert report.main(argv) == 0
+    page = Path(os.path.join(report_dir, "week_2026_08_15.html")).read_text(encoding="utf-8")
+    assert "narrative refused twice (6 words)" in page
+    assert "narrative off: narrative refused" not in page
+    assert len(calls) == 4
+    downgrade_stamp(os.path.join(report_dir, "week_2026_08_15.html"))
+    assert report.main(argv) == 0
+    assert len(calls) == 6
+
+
+def test_a_refusal_on_the_open_window_is_not_recorded_against_it(tmp_path, monkeypatch):
+    windows = two_windows()
+    data_dir = write_windows(str(tmp_path / "data"), windows)
+    report_dir = str(tmp_path / "reports")
+    argv = ["--data-dir", data_dir, "--report-dir", report_dir]
+    monkeypatch.setattr(
+        report, "fetch_narrative", lambda prompt, timeout=180, model=None: ("One. Two. Three. Four. Five. Six.", None)
+    )
+    assert report.main(argv) == 0
+    stored = report.load_narratives(data_dir)
+    assert "week_2026_08_15" in stored
+    assert "week_2026_08_22" not in stored

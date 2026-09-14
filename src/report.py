@@ -2098,10 +2098,50 @@ def over_narrative_cap(text):
     return count_sentences(text) > NARRATIVE_MAX_SENTENCES or len(text.split()) > NARRATIVE_WORDS
 
 
+NARRATIVE_WRITTEN = "narrative written"
+
+NARRATIVE_REUSED = "narrative reused"
+
+NARRATIVE_STORE = "narratives.json"
+
+
 def narrative_off_note(note):
     if note and "not on PATH" in note:
-        return "narrative off: claude not on PATH for the scheduled run"
-    return "narrative off: %s" % (note or "none written for this run")
+        return "narrative off: claude not on PATH"
+    if note and note.startswith("narrative "):
+        return note
+    return "narrative off: %s" % (note or "no narrative call has been made for this window")
+
+
+def narrative_status(narrative, note):
+    if narrative:
+        return NARRATIVE_REUSED if note == NARRATIVE_REUSED else NARRATIVE_WRITTEN
+    return narrative_off_note(note)
+
+
+def narrative_store_path(data_dir=None):
+    return os.path.join(data_dir or default_data_dir(), NARRATIVE_STORE)
+
+
+def load_narratives(data_dir=None):
+    try:
+        with open(narrative_store_path(data_dir), encoding="utf-8") as handle:
+            stored = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return stored if isinstance(stored, dict) else {}
+
+
+def store_narrative(data_dir, key, narrative, note):
+    stored = load_narratives(data_dir)
+    stored[key] = {"narrative": narrative, "note": note}
+    path = narrative_store_path(data_dir)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(stored, handle, indent=1, sort_keys=True)
+    return stored
 
 
 def _narrative_section(narrative):
@@ -2242,8 +2282,10 @@ def rebuild_stale(
     skip_keys=(),
     refresh_narrative=False,
     data_dir=None,
+    no_narrative=False,
 ):
     report_dir = report_dir or default_report_dir()
+    stored = load_narratives(data_dir)
     rebuilt = []
     for window, stamp in stale_windows(windows, report_dir, force_all, skip_keys):
         drift = frozen_data_drift(window, stamp)
@@ -2254,24 +2296,34 @@ def rebuild_stale(
                 % (window["window"]["key"], drift),
                 file=sys.stderr,
             )
-        narrative = stamp["narrative"] if stamp else None
-        note = None
+        key = window["window"]["key"]
+        entry = stored.get(key) or {}
+        narrative = entry.get("narrative") or (stamp["narrative"] if stamp else None)
+        note = NARRATIVE_REUSED if narrative else entry.get("note")
         recommendations = advice.recommend(window, window["findings"], config)
         analysis, store = analysis_for(window, config, data_dir)
-        if refresh_narrative:
+        never_asked = narrative is None and "narrative" not in entry
+        if refresh_narrative or (never_asked and not no_narrative):
             fresh, error = narrative_for(windows, window, config, recommendations, analysis)
             if error:
                 note = error
-                print("narrative skipped for %s: %s" % (window["window"]["key"], error), file=sys.stderr)
+                print("narrative skipped for %s: %s" % (key, error), file=sys.stderr)
+            elif fresh:
+                note = NARRATIVE_WRITTEN
             narrative = fresh or narrative
+            if fresh or not window["window"].get("is_current"):
+                stored = store_narrative(data_dir, key, fresh, note)
+        elif narrative and "narrative" not in entry:
+            stored = store_narrative(data_dir, key, narrative, note)
         write_report(
             windows, window, narrative, report_dir, recommendations, analysis, store, config, narrative_note=note
         )
         rebuilt.append(
             {
-                "key": window["window"]["key"],
+                "key": key,
                 "from_version": stamp["format_version"] if stamp else None,
-                "narrative_reused": bool(narrative) and not refresh_narrative,
+                "narrative_written": note == NARRATIVE_WRITTEN,
+                "narrative_reused": note == NARRATIVE_REUSED,
                 "drift": drift,
             }
         )
@@ -2321,7 +2373,7 @@ def render_html(
                 esc(exact(parse["files_scanned"])),
                 esc(exact(parse["records"])),
                 esc(exact(parse["malformed_lines"])),
-                "" if narrative else " &middot; " + esc(narrative_off_note(narrative_note)),
+                " &middot; " + esc(narrative_status(narrative, narrative_note)),
             ),
             _weights_notice(windows),
             _verdict_section(target, previous, recommendations, ceiling_change),
@@ -2568,22 +2620,19 @@ def narrative_for(windows, target, config, recommendations=None, analysis=None, 
     if text and over_narrative_cap(text):
         text, error = ask(NARRATIVE_RETRY_SENTENCES)
         if text and over_narrative_cap(text):
-            return None, "the answer ran past %d sentences or %d words twice" % (
-                NARRATIVE_MAX_SENTENCES,
-                NARRATIVE_WORDS,
-            )
+            return None, "narrative refused twice (%d words)" % len(text.split())
     return text, error
 
 
 def rebuild_summary(rebuilt, windows):
     if not rebuilt:
         return "  format             : %d, all %d pages current" % (REPORT_FORMAT_VERSION, len(windows))
-    reused = sum(1 for item in rebuilt if item["narrative_reused"])
-    return "  format             : %d, rebuilt %d stale page(s) [%s], narrative reused on %d" % (
+    return "  format             : %d, rebuilt %d stale page(s) [%s], narrative written on %d, reused on %d" % (
         REPORT_FORMAT_VERSION,
         len(rebuilt),
         ", ".join(item["key"] for item in rebuilt),
-        reused,
+        sum(1 for item in rebuilt if item["narrative_written"]),
+        sum(1 for item in rebuilt if item["narrative_reused"]),
     )
 
 
@@ -2627,6 +2676,10 @@ def main(argv=None):
         if error:
             narrative_note = error
             print("narrative skipped: %s" % error, file=sys.stderr)
+        elif narrative:
+            narrative_note = NARRATIVE_WRITTEN
+        if narrative or not target["window"].get("is_current"):
+            store_narrative(data_dir, target["window"]["key"], narrative, narrative_note)
 
     path = write_report(
         windows, target, narrative, report_dir, recommendations, analysis, store, config,
@@ -2640,6 +2693,7 @@ def main(argv=None):
         skip_keys={target["window"]["key"]},
         refresh_narrative=args.refresh_narrative,
         data_dir=data_dir,
+        no_narrative=args.no_narrative,
     )
     print(console_summary(windows, target, recommendations))
     print(rebuild_summary(rebuilt, windows))

@@ -502,8 +502,8 @@ self-contained HTML page. The reading path is, in order:
    holds fewer than `delta.MIN_PREVIOUS_TURNS` (100) turns, the block is one line saying so.
 3. **Why this week looked like this** — the narrative, capped at four sentences and 90 words, and
    handed the delta claim and the anomaly claims as its context. When no narrative exists neither the
-   heading nor the section is rendered; the header meta line carries one notice instead, naming what
-   writes one, the `claude` CLI on PATH.
+   heading nor the section is rendered. The header meta line always states the outcome: *narrative
+   written*, *narrative reused*, or *narrative off: <reason>* — never a bare absence.
 4. **What looks wrong** — the anomaly lane, read from the window's stored `anomalies`. At most
    `report.ANOMALY_CARDS` (5) cards, ranked by score, and a line counting the rest. Each card is a
    claim with its measured numbers, one chart or table, the concrete action, and the coverage of the
@@ -1256,8 +1256,14 @@ notices. Bump when unsure.
 The narrative section costs one headless Claude call per window. A tool whose purpose
 is to reduce token spend cannot fire nine of those three times a day, so:
 
-- **A format rebuild never calls the API.** It reuses the narrative already embedded in
-  the stale page. Rebuilding all nine pages costs zero tokens.
+- **A format rebuild reuses the prose it already has.** `data/narratives.json` holds one
+  entry per window — the prose and the note describing the last outcome — and the stale
+  page's `data-narrative` attribute is the fallback when the sidecar has no entry yet.
+  Rebuilding pages that already have prose costs zero tokens.
+- **A window that has never been asked gets one call, once.** A closed window with no
+  stored narrative and no recorded attempt is asked on the next render even without
+  `--refresh-narrative`; the outcome, prose or refusal, is written to the sidecar, so the
+  call is never repeated. `--no-narrative` suppresses it.
 - For a page written before the stamp existed, the narrative is recovered by reading
   the prose back out of the rendered `<p>` and `<li>` elements of the narrative section.
   This is a migration path for version-0 pages only; version-1 pages always use the
