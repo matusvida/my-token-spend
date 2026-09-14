@@ -1135,7 +1135,8 @@ def test_the_list_price_tile_states_its_session_count_and_boundary_crossers():
     }
     html = report.render_html([window], window, recommendations=[recommendation()], analysis=analysed(window, records))
     verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
-    assert "3 sessions, 1 crossing a window boundary" in verdict
+    assert "priced from 3 of 4 sessions, 1 crossing a window boundary" in verdict
+    assert "$12.50" in verdict
 
 
 def test_the_verdict_carries_four_tiles_and_the_burn_line():
@@ -2213,3 +2214,20 @@ def test_a_refusal_on_the_open_window_is_not_recorded_against_it(tmp_path, monke
     stored = report.load_narratives(data_dir)
     assert "week_2026_08_15" in stored
     assert "week_2026_08_22" not in stored
+
+
+def test_the_list_price_tile_refuses_a_figure_it_cannot_cover():
+    window, records = storm_window()
+    window["cost_usd"] = {
+        "usd": 230.56,
+        "sessions": 102,
+        "priced_sessions": 1,
+        "crossing_sessions": 0,
+        "share": 1 / 102.0,
+        "label": cost.LABEL,
+    }
+    html = report.render_html([window], window, recommendations=[recommendation()], analysis=analysed(window, records))
+    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
+    assert "list price unavailable: 1 of 102 sessions priced" in verdict
+    assert "$230.56" not in verdict
+    assert cost.LABEL not in verdict

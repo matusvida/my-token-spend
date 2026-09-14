@@ -301,8 +301,15 @@ them. A window's USD is the sum of the intervals whose own timestamp falls insid
 that straddles a reset splits its price between the two windows in the proportion its work actually
 fell — within the coarseness of the entries, which is one per CLI exit or resume. A session's first
 point books whole to its own window; a session stored before this booking existed, with no points,
-falls back to the window holding its first record. The tile states how many sessions were priced and
-how many of them crossed a boundary. The figure is labelled *list price, as `/cost` shows it; not
+falls back to the window holding its first record. A store written before the points existed carries
+no timestamp on its per-file state, so the points come back only on `collect --rescan`; the schema
+version is what makes the upgrade notice ask for that run.
+
+The tile states how many of the window's sessions were priced and how many of them crossed a
+boundary. Below `report.USD_MIN_COVERAGE` (half the window's sessions) it prints no dollar figure at
+all, only *list price unavailable: N of M sessions priced* — a total drawn from a tenth of the
+sessions is not comparable with one drawn from all of them, and two such figures side by side read
+as an inversion that is really a coverage gap. The figure is labelled *list price, as `/cost` shows it; not
 what the subscription bills* everywhere it is shown — it is Claude Code's own estimate of what the
 same tokens would have cost on the API, not a billing figure.
 

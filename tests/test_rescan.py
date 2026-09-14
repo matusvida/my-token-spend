@@ -314,3 +314,36 @@ def test_rescan_cannot_be_combined_with_another_transcript_re_read(home, capsys)
 
     assert cli.main(["collect", "--rescan", "--backfill"]) == 1
     assert "cannot be combined" in capsys.readouterr().err
+
+
+def age_the_cost_store(workspace):
+    path = workspace["out"] / "data" / "session_costs.json"
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    for entry in stored.values():
+        entry["points"] = []
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    state = state_of(workspace)
+    for entry in state["files"].values():
+        if entry.get("cost"):
+            entry["cost"].pop("ts", None)
+    workspace["state"].write_text(json.dumps(state), encoding="utf-8")
+
+
+def cost_points(workspace):
+    path = workspace["out"] / "data" / "session_costs.json"
+    return {k: v.get("points") or [] for k, v in json.loads(path.read_text(encoding="utf-8")).items()}
+
+
+def test_a_rescan_rebuilds_the_cost_points_a_pre_upgrade_store_never_stored(workspace):
+    seed(workspace)
+    assert cost_points(workspace)["s1"]
+    age_the_cost_store(workspace)
+    assert cost_points(workspace)["s1"] == []
+
+    run(workspace)
+    assert cost_points(workspace)["s1"] == [], "an incremental collect re-reads nothing"
+
+    run(workspace, rescan=True)
+    points = cost_points(workspace)["s1"]
+    assert len(points) == 1
+    assert points[0][1] == 12.5

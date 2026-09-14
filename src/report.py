@@ -1264,19 +1264,37 @@ def unattributed_subagent(window):
     return max(0.0, sidechain - named), sidechain
 
 
+USD_MIN_COVERAGE = 0.5
+
+
+def usd_coverage_gap(cost_block):
+    sessions = cost_block.get("sessions") or 0
+    priced = cost_block.get("priced_sessions") or 0
+    if not sessions or priced >= USD_MIN_COVERAGE * sessions:
+        return None
+    return "list price unavailable: %d of %d sessions priced" % (priced, sessions)
+
+
 def usd_value(window):
-    usd = (window.get("cost_usd") or {}).get("usd")
+    block = window.get("cost_usd") or {}
+    if usd_coverage_gap(block):
+        return "unavailable"
+    usd = block.get("usd")
     return "unknown" if usd is None else "$%.2f" % usd
 
 
 def usd_basis(cost_block):
     label = cost_block.get("label") or cost.LABEL
+    gap = usd_coverage_gap(cost_block)
+    if gap:
+        return gap
     priced = cost_block.get("priced_sessions")
     if not priced:
         return label
-    return "%s; %s, %s crossing a window boundary" % (
+    return "%s; priced from %d of %d sessions, %s crossing a window boundary" % (
         label,
-        text.plural(priced, "session"),
+        priced,
+        cost_block.get("sessions") or 0,
         exact(cost_block.get("crossing_sessions") or 0),
     )
 

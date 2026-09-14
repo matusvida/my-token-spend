@@ -241,7 +241,7 @@ def aggregate(records):
 
 
 def test_the_schema_version_marks_the_records_that_carry_the_new_fields():
-    assert aggregate([new_rec("2026-08-25T10:00:00+00:00")])["schema_version"] == 2
+    assert aggregate([new_rec("2026-08-25T10:00:00+00:00")])["schema_version"] == collect.SCHEMA_VERSION
 
 
 def test_spend_is_broken_down_by_mcp_server_and_plugin():

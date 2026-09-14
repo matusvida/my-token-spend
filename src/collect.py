@@ -18,7 +18,7 @@ import text
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 STANDARD_OFFSET = timedelta(seconds=-time.timezone)
 DAYLIGHT_OFFSET = timedelta(seconds=-time.altzone) if time.daylight else STANDARD_OFFSET
