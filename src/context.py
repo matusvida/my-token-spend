@@ -158,8 +158,11 @@ def _downsample(series, limit):
             if point[3]:
                 weights[point[3]] += point[2]
         leader = max(weights, key=weights.get) if weights else None
-        peak = max(bucket, key=lambda point: point[1])
-        binned.append([peak[0], peak[1], sum(point[2] for point in bucket), leader])
+        offset = max(range(len(bucket)), key=lambda position: bucket[position][1])
+        peak = bucket[offset]
+        binned.append(
+            [peak[0], peak[1], sum(point[2] for point in bucket), leader, int(index * stride) + offset]
+        )
     return binned
 
 

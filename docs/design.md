@@ -589,7 +589,7 @@ carried context, downsampled to `context.SERIES_POINTS` (300) bins; each bin kee
 and the growth of the whole bin, so the peak a reader judges the threshold line against is real. The
 footer states the binning — *5,233 turns binned to 300 points, each point the max of its bin* — so
 the headline turn count can be checked against what the chart actually plots. The three axis labels
-name the **turn** a bin stands for, not the bin's index, and carry the date as well as the clock when
+name the **turn** of the point the bin draws, not the bin's index, and carry the date as well as the clock when
 the session spans more than one day, so a four-day session cannot read as one morning.
 
 **A legend names what is drawn, and only what is readable.** Every colour a chart paints carries a

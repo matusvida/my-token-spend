@@ -331,3 +331,19 @@ def test_downsampling_keeps_every_token_of_growth():
         record["ts"] = "2026-08-25T14:00:%06.3f+00:00" % (i * 0.001)
     summary = growth_of(session)
     assert sum(point[2] for point in summary["series"]) == summary["growth_total"]
+
+
+def test_a_downsampled_point_carries_the_source_index_of_its_peak():
+    session = [rec(at(0), cache_read=THRESHOLD + 1000) for _ in range(context.SERIES_POINTS + 500)]
+    for i, record in enumerate(session):
+        record["ts"] = "2026-08-25T14:00:%06.3f+00:00" % (i * 0.001)
+    session[5]["cache_read"] = THRESHOLD + 9_000_000
+    series = growth_of(session)["series"]
+    peak = max(series, key=lambda point: point[1])
+    assert peak[4] == 5
+    assert [point[4] for point in series] == sorted(point[4] for point in series)
+
+
+def test_an_undersampled_series_carries_no_source_index():
+    session = [rec(at(i), cache_read=THRESHOLD + 1000 * i) for i in range(13)]
+    assert all(len(point) == 4 for point in growth_of(session)["series"])

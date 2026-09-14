@@ -485,6 +485,11 @@ def _turn_of(position, drawn, points):
     return int(round(position * (points - 1) / float(drawn - 1))) + 1
 
 
+def _turn_at(series, position, points):
+    point = series[position]
+    return point[4] + 1 if len(point) > 4 else _turn_of(position, len(series), points)
+
+
 def _svg(height, body):
     return '<svg viewBox="0 0 %d %d" class="chart" role="img">%s</svg>' % (PLOT_WIDTH, height, body)
 
@@ -580,7 +585,7 @@ def svg_context_series(chart, height=280):
                 esc(
                     "turn %s (%s)"
                     % (
-                        "{:,}".format(_turn_of(position, len(series), points)),
+                        "{:,}".format(_turn_at(series, position, points)),
                         _stamp(series[position][0], dated),
                     )
                 ),

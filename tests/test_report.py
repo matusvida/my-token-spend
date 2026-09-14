@@ -2407,3 +2407,27 @@ def test_a_trimmed_narrative_counts_as_written_in_the_rebuild_summary(tmp_path, 
     assert report.main(argv + ["--refresh-narrative"]) == 0
     out = capsys.readouterr().out
     assert "narrative written on 1, reused on 0" in out
+
+
+def test_the_context_axis_labels_a_binned_point_by_its_carried_turn():
+    import charts
+
+    chart = {
+        "kind": "context_series",
+        "series": [
+            ["2026-09-07T09:16:00+00:00", 100000, 10, "Bash", 0],
+            ["2026-09-09T10:24:00+00:00", 150000, 20, "Bash", 1907],
+            ["2026-09-11T16:53:00+00:00", 200000, 30, "Bash", 5230],
+        ],
+        "series_points": 5233,
+        "threshold": 150000,
+        "compactions": [],
+        "by_tool": [{"tool": "Bash", "tokens": 60, "results": 3}],
+        "top_results": [],
+        "coverage": {},
+    }
+    svg = charts.svg_context_series(chart)
+    assert "turn 1 (09/07 09:16)" in svg
+    assert "turn 1,908 (09/09 10:24)" in svg
+    assert "turn 5,231 (09/11 16:53)" in svg
+    assert "turn 2,617 (" not in svg
