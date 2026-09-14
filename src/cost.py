@@ -15,7 +15,7 @@ SOURCE_FIELDS = {
 }
 
 
-def capture(entry):
+def capture(entry, ts=None):
     if entry.get("type") != "cost-state":
         return None
     session = entry.get("sessionId")
@@ -29,7 +29,7 @@ def capture(entry):
         counts = {cls: int(usage.get(SOURCE_FIELDS[cls]) or 0) for cls in CLASSES}
         counts["usd"] = float(usage.get("costUSD") or 0.0)
         models[name] = counts
-    return {"session": session, "usd": float(total), "models": models}
+    return {"session": session, "ts": ts, "usd": float(total), "models": models}
 
 
 def store_path(data_dir):
@@ -48,10 +48,49 @@ def load(data_dir):
 def merge(data_dir, fresh, discard_stored=False):
     known = {} if discard_stored else load(data_dir)
     for entry in fresh:
-        if entry:
-            known[entry["session"]] = entry
+        if not entry:
+            continue
+        stored = known.get(entry["session"]) or {}
+        points = {ts: usd for ts, usd in stored.get("points") or []}
+        if entry.get("ts"):
+            points[entry["ts"]] = max(entry["usd"], points.get(entry["ts"], 0.0))
+        merged = entry if entry["usd"] >= stored.get("usd", 0.0) else dict(stored)
+        known[entry["session"]] = {
+            "session": entry["session"],
+            "usd": merged["usd"],
+            "models": merged.get("models") or {},
+            "points": [[ts, points[ts]] for ts in sorted(points)],
+        }
     store_path(data_dir).write_text(json.dumps(known, sort_keys=True), encoding="utf-8")
     return known
+
+
+def booked_windows(costs, window_of, fallback=None):
+    booked = {}
+
+    def book(start, session, usd):
+        block = booked.setdefault(start, {"usd": 0.0, "sessions": set(), "crossing": set()})
+        block["usd"] += usd
+        block["sessions"].add(session)
+
+    for session, entry in costs.items():
+        points = sorted(entry.get("points") or [])
+        if not points:
+            start = (fallback or {}).get(session)
+            if start is not None:
+                book(start, session, float(entry["usd"]))
+            continue
+        highest = 0.0
+        starts = set()
+        for ts, usd in points:
+            start = window_of(ts)
+            book(start, session, max(0.0, float(usd) - highest))
+            starts.add(start)
+            highest = max(highest, float(usd))
+        if len(starts) > 1:
+            for start in starts:
+                booked[start]["crossing"].add(session)
+    return booked
 
 
 def sessions_by_window(windows):
@@ -68,14 +107,22 @@ def sessions_by_window(windows):
     return owned
 
 
-def window_block(session_ids, costs):
+def window_block(session_ids, costs, booked=None):
     session_ids = list(session_ids)
-    priced = [costs[session] for session in session_ids if session in costs]
+    if booked is None:
+        priced = [costs[session] for session in session_ids if session in costs]
+        usd = round(sum(entry["usd"] for entry in priced), 4) if priced else None
+        priced_sessions, crossing = len(priced), 0
+    else:
+        priced_sessions = len(booked["sessions"])
+        usd = round(booked["usd"], 4) if priced_sessions else None
+        crossing = len(booked["crossing"])
     return {
-        "usd": round(sum(entry["usd"] for entry in priced), 4) if priced else None,
+        "usd": usd,
         "sessions": len(session_ids),
-        "priced_sessions": len(priced),
-        "share": (len(priced) / len(session_ids)) if session_ids else 0.0,
+        "priced_sessions": priced_sessions,
+        "crossing_sessions": crossing,
+        "share": (priced_sessions / len(session_ids)) if session_ids else 0.0,
         "label": LABEL,
     }
 

@@ -259,7 +259,7 @@ def read_file(path, config, stored):
             "malformed": 0,
             "pending_results": {},
             "agent_calls": [],
-            "cost": stored.get("cost"),
+            "costs": [stored["cost"]] if stored.get("cost") else [],
         }
 
     resume = bool(stored) and size > stored["size"]
@@ -269,6 +269,8 @@ def read_file(path, config, stored):
     source_tool_use_id = stored.get("source_tool_use_id") if resume else None
     after_compaction = bool(stored.get("pending_compaction")) if resume else False
     session_cost = stored.get("cost") if resume else None
+    session_costs = []
+    last_ts = (session_cost or {}).get("ts")
 
     with path.open("rb") as handle:
         handle.seek(offset)
@@ -301,8 +303,16 @@ def read_file(path, config, stored):
         if not isinstance(entry, dict):
             malformed += 1
             continue
+        if entry.get("timestamp"):
+            try:
+                last_ts = parse_ts(entry["timestamp"]).isoformat()
+            except (TypeError, ValueError):
+                pass
         if entry.get("type") == "cost-state":
-            session_cost = cost.capture(entry) or session_cost
+            captured = cost.capture(entry, ts=last_ts)
+            if captured:
+                session_costs.append(captured)
+                session_cost = captured
             continue
         if entry.get("type") == "user":
             prompt = _prompt_text(entry, limit)
@@ -349,7 +359,7 @@ def read_file(path, config, stored):
         "malformed": malformed,
         "pending_results": pending_results,
         "agent_calls": calls,
-        "cost": session_cost,
+        "costs": session_costs or ([session_cost] if session_cost else []),
     }
 
 
@@ -573,6 +583,7 @@ def aggregate_window(
     samples=None,
     costs=None,
     owned_sessions=None,
+    booked_cost=None,
 ):
     tz = zone(config)
     start_utc, end_utc, boundary_source = window_bounds(start_date, config, instants)
@@ -645,7 +656,9 @@ def aggregate_window(
         "field_coverage": field_coverage(records),
         "context": context.window_block(records, config),
         "cost_usd": cost.window_block(
-            owned_sessions if owned_sessions is not None else {r["sessionId"] for r in records}, costs or {}
+            owned_sessions if owned_sessions is not None else {r["sessionId"] for r in records},
+            costs or {},
+            booked=booked_cost,
         ),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
@@ -916,6 +929,12 @@ def _finalize(
     written = []
     extra = []
     owned = cost.sessions_by_window(windows)
+    owning_window = {session: start for start, sessions in owned.items() for session in sessions}
+    booked = cost.booked_windows(
+        costs or {},
+        lambda ts: window_start(parse_ts(ts), config, instants).isoformat(),
+        fallback=owning_window,
+    )
     for start, records in windows.items():
         if not records:
             continue
@@ -932,7 +951,8 @@ def _finalize(
             previous_weighted=previous_weighted.get(start),
             samples=samples,
             costs=costs,
-            owned_sessions=owned.get(start, set()),
+            owned_sessions={r["sessionId"] for r in records},
+            booked_cost=booked.get(start, {"usd": 0.0, "sessions": set(), "crossing": set()}),
         )
         key = aggregate["window"]["key"]
         _write_json(data_dir / (key + ".json"), aggregate)
@@ -1192,8 +1212,7 @@ def run(
         fresh.extend(result["records"])
         pending_results.update(result["pending_results"])
         fresh_calls.extend(result["agent_calls"])
-        if result["cost"]:
-            fresh_costs.append(result["cost"])
+        fresh_costs.extend(result["costs"])
 
     state["files"] = {k: v for k, v in state["files"].items() if Path(k).exists()}
     malformed_total = sum(entry.get("malformed", 0) for entry in state["files"].values())
