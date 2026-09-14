@@ -2231,3 +2231,10 @@ def test_the_list_price_tile_refuses_a_figure_it_cannot_cover():
     assert "list price unavailable: 1 of 102 sessions priced" in verdict
     assert "$230.56" not in verdict
     assert cost.LABEL not in verdict
+
+
+def test_the_page_opens_a_collapsed_section_the_reader_was_sent_to():
+    windows = [make_window()]
+    page = report.render_html(windows, windows[0])
+    assert "hashchange" in page
+    assert "box.open = true" in page

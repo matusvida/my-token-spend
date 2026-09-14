@@ -509,6 +509,16 @@ SCRIPT = """
   });
   document.addEventListener('focusout', hide);
   document.addEventListener('scroll', hide, true);
+  function openTarget() {
+    if (!location.hash) { return; }
+    var target;
+    try { target = document.querySelector(location.hash); } catch (error) { return; }
+    if (!target) { return; }
+    var box = target.closest('details');
+    if (box) { box.open = true; target.scrollIntoView(); }
+  }
+  window.addEventListener('hashchange', openTarget);
+  openTarget();
 })();
 """
 
@@ -707,7 +717,21 @@ def _coverage_note(coverage):
     return "%s on %.0f%% of turns." % (coverage["field"], 100.0 * coverage["share"])
 
 
-def _anomaly_card(item):
+ANOMALY_ANCHOR_TEXT = {evidence.ROUND_TRIPS: "round trips table"}
+
+
+def _anomaly_action(item, anchors):
+    action = _inline_code(item["action"])
+    anchor = item.get("anchor")
+    phrase = ANOMALY_ANCHOR_TEXT.get(anchor)
+    if not phrase:
+        return action
+    if anchor in anchors:
+        return action.replace(phrase, '<a href="#%s">%s</a>' % (esc(anchor), phrase), 1)
+    return action.replace(" in the %s" % phrase, "", 1)
+
+
+def _anomaly_card(item, anchors=()):
     return (
         '<div class="finding anomaly" id="anomaly-%s"><div class="finding-head">'
         '<span class="finding-rule">%s</span><span class="finding-subject">%s</span>'
@@ -722,13 +746,13 @@ def _anomaly_card(item):
             esc(compact_basis(item["basis"])),
             esc(_sentence_case(item["claim"])),
             _anomaly_chart(item["chart"]),
-            _inline_code(item["action"]),
+            _anomaly_action(item, anchors),
             esc(_coverage_note(item["coverage"])),
         )
     )
 
 
-def _anomalies_section(window):
+def _anomalies_section(window, anchors=()):
     items = sorted(window.get("anomalies") or [], key=lambda item: (-item["score"], item["key"]))
     if not items:
         return (
@@ -744,7 +768,7 @@ def _anomalies_section(window):
     return (
         '<section class="card" id="anomalies"><h2>What looks wrong</h2>'
         '<p class="sub">Ranked by distance from each threshold, not by cost.</p>%s%s</section>'
-        % ("".join(_anomaly_card(item) for item in shown), tail)
+        % ("".join(_anomaly_card(item, anchors) for item in shown), tail)
     )
 
 
@@ -1876,6 +1900,15 @@ def _findings_cards_section(window, analysis, store):
     )
 
 
+def _round_trip_block(chart):
+    if not chart:
+        return ""
+    return (
+        '<p class="sub">Tool calls that came back as an error, retries included.</p>%s'
+        % _round_trip_chart_html(chart)
+    )
+
+
 def _round_trip_card(card):
     return (
         '<div class="finding" id="%s"><div class="finding-head"><span class="finding-rule">round trips</span>'
@@ -2085,7 +2118,10 @@ def _drilldown_section(analysis, store):
 
 def _raw_section(parts):
     blocks = "".join(
-        "<details><summary>%s</summary>%s</details>" % (esc(title), body) for title, body in parts if body
+        "<details%s><summary>%s</summary>%s</details>"
+        % ((' id="%s"' % esc(part[2])) if len(part) > 2 else "", esc(part[0]), part[1])
+        for part in parts
+        if part[1]
     )
     return (
         '<section class="card raw"><h2>Raw breakdowns</h2>%s</section>' % blocks
@@ -2371,6 +2407,7 @@ def render_html(
         advice.recommend(previous, previous["findings"], config) if previous else []
     )
     parse = target["parse"]
+    evidence_block = (analysis or {}).get("evidence") or {}
     raw_parts = [
         ("Every window, main agent vs subagents", _cross_week_section(windows, target, target["ceiling"].get("estimate"))),
         ("Burn inside this window", _daily_section(target, target["ceiling"])),
@@ -2379,8 +2416,11 @@ def render_html(
         ("Whale turns", _whales_section(target)),
         ("Rule lenses", _findings_section(target)),
         ("What the big cost centres did", _drilldown_section(analysis, store)),
+        ("Tool round trips", _round_trip_block(evidence_block.get("round_trip_chart")), evidence.ROUND_TRIPS),
     ]
-    anchors = {card["id"] for card in ((analysis or {}).get("evidence") or {}).get("cards") or []}
+    anchors = {card["id"] for card in evidence_block.get("cards") or []}
+    if evidence_block.get("round_trip_chart"):
+        anchors.add(evidence.ROUND_TRIPS)
     body = "".join(
         [
             "<header><h1>Claude token guardrail &mdash; %s</h1>" % esc(target["window"]["key"]),
@@ -2397,7 +2437,7 @@ def render_html(
             _verdict_section(target, previous, recommendations, ceiling_change),
             _change_section(target, previous),
             _narrative_section(narrative),
-            _anomalies_section(target),
+            _anomalies_section(target, anchors),
             _findings_cards_section(target, analysis, store),
             _lanes_section(target, analysis, store),
             _actions_section(recommendations, anchors, config, previous_recommendations),

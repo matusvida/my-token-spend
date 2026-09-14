@@ -304,3 +304,39 @@ def test_the_narrative_prompt_is_handed_the_delta_and_anomaly_claims():
     prompt = report.build_narrative_prompt(window, previous, extra_context=report.narrative_context(window, previous))
     assert "What changed this window and what looks wrong" in prompt
     assert "MCP server cost 92,799,908" in prompt
+
+
+def test_the_failing_tool_action_links_to_the_round_trips_table_on_the_page():
+    previous, window, records = pair()
+    window["anomalies"] = [
+        dict(
+            anomaly(key="failing_tool", subject="Bash"),
+            action="Read the failing Bash calls in the round trips table and fix the call site.",
+            anchor="round_trips",
+        )
+    ]
+    records = records + [
+        dict(records[0], uuid="f%d" % index, tools=[{"name": "Bash", "hash": "h%d" % index,
+             "result_chars": 10, "is_error": True, "denied": False}])
+        for index in range(6)
+    ]
+    html = render(previous, window, records)
+    lane = html.split("What looks wrong")[1].split("</section>")[0]
+    assert 'href="#round_trips"' in lane
+    assert 'id="round_trips"' in html
+    assert html.index('id="round_trips"') > html.index('href="#round_trips"')
+
+
+def test_the_failing_tool_action_drops_the_pointer_when_no_table_is_rendered():
+    previous, window, records = pair()
+    window["anomalies"] = [
+        dict(
+            anomaly(key="failing_tool", subject="Bash"),
+            action="Read the failing Bash calls in the round trips table and fix the call site.",
+            anchor="round_trips",
+        )
+    ]
+    html = report.render_html([previous, window], window, analysis=None, config=CONFIG)
+    lane = html.split("What looks wrong")[1].split("</section>")[0]
+    assert "round trips table" not in lane
+    assert "Read the failing Bash calls and fix the call site." in lane

@@ -382,3 +382,10 @@ def test_the_shipped_config_carries_the_anomaly_defaults():
     assert block["fail_min"] == 50
     assert block["unattributed_share"] == 0.5
     assert block["mcp_share"] == 0.04
+
+
+def test_the_failure_action_points_at_the_round_trips_anchor():
+    item = found(fail_records(155, 37), key=FAIL)[0]
+    assert item["anchor"] == "round_trips"
+    assert "round trips table" in item["action"]
+    assert "round-trips table" not in item["action"]

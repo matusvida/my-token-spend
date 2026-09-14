@@ -532,7 +532,11 @@ self-contained HTML page. The reading path is, in order:
    the four largest movements are drawn. *New this week* holds at most `report.NEW_CARDS` (2) cards,
    for recommendations that were absent last week or grew by more than `report.GROWN_POINTS` (5)
    points; when nothing qualifies it is one line. The overlap notice appears here, once.
-8. **Raw breakdowns** — the remaining lenses, collapsed.
+8. **Raw breakdowns** — the remaining lenses, collapsed. The round-trips table lives here, on a
+   `<details>` carrying `id="round_trips"`, because the `failing tool` anomaly card's action sends
+   the reader to it. An anomaly whose action names a table declares the anchor; the card links the
+   phrase when that anchor is on the page and drops the pointer when it is not, so the action can
+   never name a table the reader cannot reach.
 9. **Quota you did not use** — the `headroom` group, rendered only when a recommendation of that
    kind exists, carrying its `id="rec-headroom"` anchor.
 

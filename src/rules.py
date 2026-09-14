@@ -644,6 +644,7 @@ REPLY_SKILL_HEADLESS = "reply_skill_headless"
 REPEATED_TOOL_INPUT = "repeated_tool_input"
 CONTEXT_GROWTH_TOOL = "context_growth_tool"
 FAILING_TOOL = "failing_tool"
+ROUND_TRIPS_ANCHOR = "round_trips"
 UNATTRIBUTED_SUBAGENTS = "unattributed_subagents"
 MCP_SERVER_SHARE = "mcp_server_share"
 
@@ -665,7 +666,7 @@ def _field_coverage(records, field, subset=None):
     }
 
 
-def _anomaly(key, subject, claim, numbers, basis, score, action, coverage, chart):
+def _anomaly(key, subject, claim, numbers, basis, score, action, coverage, chart, anchor=None):
     return {
         "key": key,
         "subject": subject,
@@ -676,6 +677,7 @@ def _anomaly(key, subject, claim, numbers, basis, score, action, coverage, chart
         "action": action,
         "coverage": coverage,
         "chart": chart,
+        "anchor": anchor,
     }
 
 
@@ -966,7 +968,7 @@ def _failing_tool(records, settings):
             {"tool": name, "failures": count, "window_failures": total, "share": share},
             "%d failures on one tool" % count,
             count / float(settings["fail_min"]),
-            "Read the failing %s calls in the round-trips table and fix the call site." % name,
+            "Read the failing %s calls in the round trips table and fix the call site." % name,
             {
                 "field": "tool result status",
                 "present": resolved,
@@ -974,6 +976,7 @@ def _failing_tool(records, settings):
                 "share": (resolved / calls) if calls else 0.0,
             },
             _bars([{"label": tool_name, "value": hits} for tool_name, hits in failures.most_common(4)]),
+            anchor=ROUND_TRIPS_ANCHOR,
         )
     ]
 
