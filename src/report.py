@@ -2396,7 +2396,8 @@ def build_narrative_prompt(
         "one. Never sum "
         "the overlapping findings, and never suggest using fewer subagents - heavy orchestration is the "
         "intended workflow; right-size the workers and the batch size instead. Name the jobs by the "
-        "descriptions above rather than by session hashes."
+        "descriptions above rather than by session hashes. Answer with the paragraph itself and nothing "
+        "else: no preamble, no word or sentence count, no closing remark."
         % (sentences or NARRATIVE_SENTENCES, NARRATIVE_WORDS)
     )
     return "\n".join(lines)

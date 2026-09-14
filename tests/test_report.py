@@ -549,6 +549,11 @@ def test_the_narrative_prompt_caps_the_answer_at_three_sentences():
     assert "at most 2 sentences" in report.build_narrative_prompt(current, None, [], sentences=2)
 
 
+def test_the_narrative_prompt_forbids_a_preamble_around_the_paragraph():
+    prompt = report.build_narrative_prompt(make_window(), None, [])
+    assert "no preamble, no word or sentence count" in prompt
+
+
 def test_the_narrative_prompt_carries_the_extra_context_it_is_handed():
     current = make_window()
     prompt = report.build_narrative_prompt(current, None, [], extra_context="the Linear MCP doubled")
