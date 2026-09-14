@@ -1722,6 +1722,9 @@ def _finding_card(card, window, analysis, store):
     )
 
 
+FINDING_CARD_SHARE = 0.01
+
+
 def _findings_cards_section(window, analysis, store):
     if analysis is None or not analysis.get("evidence"):
         return (
@@ -1743,9 +1746,17 @@ def _findings_cards_section(window, analysis, store):
                 "chart": chart,
             }
         )
-    tail = ""
+    floor = FINDING_CARD_SHARE * window["totals"]["weighted"]
+    shown = [card for card in built if card["weighted_cost"] >= floor] or built[:1]
+    rest = [card for card in built if card not in shown]
+    tail = (
+        '<p class="sub">%s under %s of the window, in the rule lenses.</p>'
+        % (text.plural(len(rest), "smaller finding"), percent(100.0 * FINDING_CARD_SHARE))
+        if rest
+        else ""
+    )
     cards = []
-    for card in built:
+    for card in shown:
         if card["rule"] == evidence.ROUND_TRIPS:
             cards.append(_round_trip_card(card))
             continue

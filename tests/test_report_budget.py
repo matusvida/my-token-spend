@@ -208,22 +208,29 @@ def test_nested_details_are_stripped_whole():
     assert report.visible_words(page) == 3
 
 
-def test_every_rule_puts_its_own_evidence_on_the_page():
+def test_every_rule_above_the_card_floor_puts_its_own_evidence_on_the_page():
     window, records, calls = real_shaped()
     html = rendered(window, records, calls)
     findings = html.split("<h2>Findings</h2>")[1].split("<h2>Cost centres</h2>")[0]
     assert 'id="context_bloat-0"' in findings
     assert 'id="subagent_storm-0"' in findings
     assert 'id="agent_type_skew-0"' in findings
-    assert 'id="model_mismatch"' in findings
     assert 'id="whale_turns"' not in findings
     assert 'id="round_trips"' in findings
+    assert "in the rule lenses" in findings
     assert "threshold" in findings
-    assert "counted: 250 output, 200 thinking, 1 tool call" in findings
     assert "trivial" not in findings
     assert "tool calls on the turn" not in findings
     assert "colour is the tool that grew it" in findings
     assert "x is turn order, not a clock" in findings
+
+
+def test_the_model_mismatch_scatter_draws_the_counted_box():
+    import evidence
+
+    window, records, calls = real_shaped()
+    chart = evidence._mismatch_chart(records, CONFIG)
+    assert "counted: 250 output, 200 thinking, 1 tool call" in report._scatter_chart_html(chart)
 
 
 def test_the_cost_centres_rank_three_lanes_and_state_their_coverage():
