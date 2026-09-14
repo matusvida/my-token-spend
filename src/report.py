@@ -1526,7 +1526,7 @@ def _action_card(item, anchors, config):
     )
 
 
-UNCHANGED_POINTS = 2.0
+UNCHANGED_POINTS = 0.05
 
 GROWN_POINTS = 5.0
 
@@ -1560,7 +1560,7 @@ def advice_movement(previous_items, current_items):
                 "now": now_share,
                 "movement": movement,
                 "movement_text": "unchanged"
-                if abs(movement) <= UNCHANGED_POINTS
+                if abs(movement) < UNCHANGED_POINTS
                 else "%+.1f points" % movement,
             }
         )

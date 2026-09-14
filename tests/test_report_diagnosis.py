@@ -217,7 +217,7 @@ def test_last_weeks_advice_shows_the_figure_then_and_now():
 def test_a_recommendation_that_barely_moved_reads_as_unchanged():
     rows = report.advice_movement(
         [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 20.0)],
-        [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 21.0)],
+        [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 20.01)],
     )
     assert rows[0]["movement_text"] == "unchanged"
 
@@ -390,3 +390,29 @@ def test_a_movement_row_survives_when_the_recommendation_is_not_carded_as_new():
     block = report._actions_section(current_recs, set(), CONFIG, previous_recs)
     assert "Right-size the biggest fan-outs" in block
     assert "Nothing new this week" in block
+
+
+def test_a_row_that_fell_to_zero_reports_its_movement_not_unchanged():
+    rows = report.advice_movement(
+        [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 0.8)],
+        [],
+    )
+    assert rows[0]["then"] == 0.8
+    assert rows[0]["now"] == 0.0
+    assert rows[0]["movement_text"] == "-0.8 points"
+
+
+def test_unchanged_is_reserved_for_a_movement_that_rounds_to_zero():
+    rows = report.advice_movement(
+        [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 20.0)],
+        [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 20.02)],
+    )
+    assert rows[0]["movement_text"] == "unchanged"
+
+
+def test_a_movement_of_one_point_is_printed_not_called_unchanged():
+    rows = report.advice_movement(
+        [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 20.0)],
+        [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 21.0)],
+    )
+    assert rows[0]["movement_text"] == "+1.0 points"
