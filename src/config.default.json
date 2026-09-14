@@ -116,5 +116,33 @@
     "min_cost": 250000,
     "windows": 4,
     "min_windows_for_proposal": 2
+  },
+  "anomalies": {
+    "reply_skills": [
+      "prose:reply-style",
+      "prose:bro"
+    ],
+    "headless_cwds": [
+      "daily-improvement-review"
+    ],
+    "headless_entrypoints": [
+      "sdk-cli"
+    ],
+    "headless_prompt_sources": [
+      "scheduled",
+      "sdk"
+    ],
+    "reply_headless_share": 0.25,
+    "repeat_min": 20,
+    "repeat_minutes": 15,
+    "growth_share": 0.6,
+    "result_kb": 8,
+    "fail_min": 50,
+    "fail_dominant_share": 0.7,
+    "unattributed_share": 0.5,
+    "mcp_share": 0.04,
+    "max_cards": 5,
+    "growth_min_results": 20,
+    "growth_total_mb": 4.0
   }
 }
