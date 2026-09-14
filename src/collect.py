@@ -261,7 +261,7 @@ def read_file(path, config, stored):
             "malformed": 0,
             "pending_results": {},
             "agent_calls": [],
-            "cost": stored.get("cost"),
+            "costs": [stored["cost"]] if stored.get("cost") else [],
         }
 
     resume = bool(stored) and size > stored["size"]
@@ -272,6 +272,8 @@ def read_file(path, config, stored):
     prompt_source = stored.get("prompt_source") if resume else None
     after_compaction = bool(stored.get("pending_compaction")) if resume else False
     session_cost = stored.get("cost") if resume else None
+    session_costs = []
+    last_ts = (session_cost or {}).get("ts")
 
     with path.open("rb") as handle:
         handle.seek(offset)
@@ -304,8 +306,16 @@ def read_file(path, config, stored):
         if not isinstance(entry, dict):
             malformed += 1
             continue
+        if entry.get("timestamp"):
+            try:
+                last_ts = parse_ts(entry["timestamp"]).isoformat()
+            except (TypeError, ValueError):
+                pass
         if entry.get("type") == "cost-state":
-            session_cost = cost.capture(entry) or session_cost
+            captured = cost.capture(entry, ts=last_ts)
+            if captured:
+                session_costs.append(captured)
+                session_cost = captured
             continue
         if entry.get("type") == "user":
             prompt = _prompt_text(entry, limit)
@@ -356,7 +366,7 @@ def read_file(path, config, stored):
         "malformed": malformed,
         "pending_results": pending_results,
         "agent_calls": calls,
-        "cost": session_cost,
+        "costs": session_costs or ([session_cost] if session_cost else []),
     }
 
 
@@ -410,6 +420,15 @@ def ceiling_method_text(ceiling):
     if method == "override":
         return "the ceiling set in your config"
     if method == "top-cluster":
+        if ceiling.get("floor"):
+            return (
+                "estimate, likely low: a quota sample already puts the floor at %s (%s spent at %s%% used)"
+                % (
+                    "{:,.0f}".format(ceiling["floor"]),
+                    "{:,.0f}".format(ceiling["floor_spent"]),
+                    "{:.1f}".format(ceiling["floor_pct"]),
+                )
+            )
         return "estimated ceiling, from your own heavy weeks"
     if method == "insufficient-data":
         return "no ceiling yet, too few windows collected"
@@ -459,7 +478,20 @@ def estimate_ceiling(window_totals, config, samples=None, instants=None, now=Non
         "approximate": True,
         "cluster_size": size,
         "windows_considered": len(window_totals),
+        **sample_floor(samples or []),
     }
+
+
+def sample_floor(samples):
+    best = None
+    for entry in samples:
+        pct, weighted = entry.get("seven_day_pct"), entry.get("weighted_so_far")
+        if not pct or not weighted or pct <= 0:
+            continue
+        implied = float(weighted) / (float(pct) / 100.0)
+        if best is None or implied > best["floor"]:
+            best = {"floor": implied, "floor_spent": float(weighted), "floor_pct": float(pct)}
+    return best or {"floor": None, "floor_spent": None, "floor_pct": None}
 
 
 TOKEN_FIELDS = ("input", "output", "thinking", "cache_create", "cache_read")
@@ -581,6 +613,7 @@ def aggregate_window(
     costs=None,
     owned_sessions=None,
     previous_window=None,
+    booked_cost=None,
 ):
     tz = zone(config)
     start_utc, end_utc, boundary_source = window_bounds(start_date, config, instants)
@@ -653,7 +686,9 @@ def aggregate_window(
         "field_coverage": field_coverage(records),
         "context": context.window_block(records, config),
         "cost_usd": cost.window_block(
-            owned_sessions if owned_sessions is not None else {r["sessionId"] for r in records}, costs or {}
+            owned_sessions if owned_sessions is not None else {r["sessionId"] for r in records},
+            costs or {},
+            booked=booked_cost,
         ),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
@@ -939,6 +974,12 @@ def _finalize(
     extra = []
     owned = cost.sessions_by_window(windows)
     produced = {}
+    owning_window = {session: start for start, sessions in owned.items() for session in sessions}
+    booked = cost.booked_windows(
+        costs or {},
+        lambda ts: window_start(parse_ts(ts), config, instants).isoformat(),
+        fallback=owning_window,
+    )
     for start, records in windows.items():
         if not records:
             continue
@@ -955,7 +996,8 @@ def _finalize(
             previous_weighted=previous_weighted.get(start),
             samples=samples,
             costs=costs,
-            owned_sessions=owned.get(start, set()),
+            owned_sessions={r["sessionId"] for r in records},
+            booked_cost=booked.get(start, {"usd": 0.0, "sessions": set(), "crossing": set()}),
             previous_window=_previous_aggregate(ordered, start, produced, data_dir),
         )
         key = aggregate["window"]["key"]
@@ -1217,8 +1259,7 @@ def run(
         fresh.extend(result["records"])
         pending_results.update(result["pending_results"])
         fresh_calls.extend(result["agent_calls"])
-        if result["cost"]:
-            fresh_costs.append(result["cost"])
+        fresh_costs.extend(result["costs"])
 
     state["files"] = {k: v for k, v in state["files"].items() if Path(k).exists()}
     malformed_total = sum(entry.get("malformed", 0) for entry in state["files"].values())

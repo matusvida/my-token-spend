@@ -46,9 +46,15 @@ definition files on disk, `install-schedule` emits the OS scheduler definitions.
   the percentage is a percentage of the quota. `top-cluster` is inferred from the user's own heavy
   weeks, so present it as an estimate of their own habit, never as a limit. `quota` prints the
   latest sample and the method.
+- **`tune` opens with the decisions it needs from the user - relay that section first.** It lists
+  every agent type that is on neither `advice.sonnet_class_agents` nor `advice.opus_class_agents`
+  with its cost, run count and median thinking and output per turn, and the `config.json` line that
+  classifies it. Nothing else in the run prices those agents until the user answers, so give them
+  that section in full before any proposal. Do not edit `config.json` for them unless they ask.
 - **`tune` proposes; it never applies.** It prints a patch per file-level proposal and changes
   nothing. Do not apply one for the user unless they ask for that file to be changed, and never edit
-  an agent definition, a skill or a CLAUDE.md as a side effect of running it.
+  an agent definition, a skill or a CLAUDE.md as a side effect of running it. The only file it writes
+  is `data/tune_last.json` in the data home, which is how the next run reports what moved.
 - **Built-in agent types are proposed against a setting, not a file.** `general-purpose`, `Explore`
   and the rest take their tier from `env.CLAUDE_CODE_SUBAGENT_MODEL` in `~/.claude/settings.json`
   and from the per-call `model` argument. `tune` reads that file to report the current value and

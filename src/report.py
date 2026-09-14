@@ -944,6 +944,29 @@ def _sessions_section(window):
     )
 
 
+WHALE_SAME_COST = 0.01
+
+WHALE_PROMPT_HEAD = 80
+
+
+def collapse_whales(whales):
+    groups = []
+    for finding in sorted(whales, key=lambda f: (-f["weighted_cost"], f["evidence"].get("ts") or "")):
+        head = (finding["evidence"].get("prompt") or "")[:WHALE_PROMPT_HEAD]
+        for group in groups:
+            leader = group[0]
+            if leader["subject"] != finding["subject"]:
+                continue
+            if (leader["evidence"].get("prompt") or "")[:WHALE_PROMPT_HEAD] != head:
+                continue
+            if abs(finding["weighted_cost"] - leader["weighted_cost"]) <= WHALE_SAME_COST * leader["weighted_cost"]:
+                group.append(finding)
+                break
+        else:
+            groups.append([finding])
+    return groups
+
+
 def _whales_section(window):
     whales = [f for f in window["findings"] if f["rule"] == "whale_turns"]
     if not whales:
@@ -951,6 +974,7 @@ def _whales_section(window):
     rows = [
         [
             exact(finding["weighted_cost"]),
+            "1" if len(group) == 1 else "%d near-identical" % len(group),
             finding["evidence"].get("model", "-"),
             finding["evidence"].get("effort") or "-",
             "subagent" if finding["evidence"].get("isSidechain") else "main",
@@ -959,14 +983,16 @@ def _whales_section(window):
             (finding["evidence"].get("ts") or "")[:19].replace("T", " "),
             (finding["evidence"].get("prompt") or "-")[:80],
         ]
-        for finding in whales
+        for group in collapse_whales(whales)
+        for finding in [group[0]]
     ]
     return (
         '<section class="card"><h2>Whale turns</h2>'
         '<p class="sub">The single most expensive assistant turns in this window, with the prompt that '
-        "triggered them.</p><div class=\"table-wrap\">%s</div></section>"
+        "triggered them. Turns in one session that share a prompt head and cost within 1%% of each other "
+        "are one row, counted.</p><div class=\"table-wrap\">%s</div></section>"
         % table(
-            ["weighted", "model", "effort", "lane", "agent", "repo", "when (UTC)", "prompt"],
+            ["weighted", "turns", "model", "effort", "lane", "agent", "repo", "when (UTC)", "prompt"],
             rows,
         )
     )
@@ -1243,6 +1269,18 @@ def usd_value(window):
     return "unknown" if usd is None else "$%.2f" % usd
 
 
+def usd_basis(cost_block):
+    label = cost_block.get("label") or cost.LABEL
+    priced = cost_block.get("priced_sessions")
+    if not priced:
+        return label
+    return "%s; %s, %s crossing a window boundary" % (
+        label,
+        text.plural(priced, "session"),
+        exact(cost_block.get("crossing_sessions") or 0),
+    )
+
+
 def reset_label(window):
     return "reset %s UTC" % window["window"]["end_utc"][:16].replace("T", " ")
 
@@ -1265,7 +1303,47 @@ def _burn_chart(window):
     )
 
 
-def _verdict_section(window, previous, recommendations):
+CEILING_METHOD_WORDS = {
+    "quota-fit": "fitted",
+    "top-cluster": "estimated",
+    "override": "set in config",
+    "insufficient-data": "unknown",
+}
+
+CEILING_CHANGE_TOLERANCE = 0.005
+
+
+def ceiling_tile_note(window):
+    ceiling = window["ceiling"]
+    if collect.quota_is_known(ceiling):
+        note = collect.ceiling_method_text(ceiling)
+        if ceiling.get("method") == "quota-fit" and not window["window"].get("is_current"):
+            note += "; applied to this closed window once the fit existed"
+        return note
+    if ceiling.get("floor"):
+        return collect.ceiling_method_text(ceiling)
+    return "quota unknown this window, ceiling estimated from your own heavy weeks"
+
+
+def ceiling_change_note(stamp, ceiling):
+    if not stamp:
+        return None
+    before, before_method = stamp.get("ceiling"), stamp.get("ceiling_method")
+    if before is None and not before_method:
+        return None
+    now, method = ceiling.get("estimate"), ceiling.get("method")
+    moved = before is None or now is None or abs(now - before) > CEILING_CHANGE_TOLERANCE * max(before, now)
+    if not moved and before_method == method:
+        return None
+    return "ceiling changed since this page was last rendered: %s %s to %s %s" % (
+        "unknown" if before is None else compact(before),
+        CEILING_METHOD_WORDS.get(before_method, before_method or "unknown"),
+        "unknown" if now is None else compact(now),
+        CEILING_METHOD_WORDS.get(method, method or "unknown"),
+    )
+
+
+def _verdict_section(window, previous, recommendations, ceiling_change=None):
     ceiling = window["ceiling"]
     totals = window["totals"]
     unattributed, sidechain = unattributed_subagent(window)
@@ -1274,16 +1352,14 @@ def _verdict_section(window, previous, recommendations):
         _tile(
             "%s used" % ("Quota" if collect.quota_is_known(ceiling) else "Ceiling"),
             percent(ceiling["percent_used"]) if ceiling.get("percent_used") is not None else "unknown",
-            collect.ceiling_method_text(ceiling)
-            if collect.quota_is_known(ceiling)
-            else "quota unknown this window, ceiling estimated from your own heavy weeks",
+            ceiling_tile_note(window),
         ),
         _tile(
             "Weighted spent",
             compact(totals["weighted"]),
             "%s turns, %s sessions" % (exact(totals["turns"]), exact(totals["sessions"])),
         ),
-        _tile("List price", usd_value(window), cost_block.get("label") or cost.LABEL),
+        _tile("List price", usd_value(window), usd_basis(cost_block)),
         _tile(
             "Unattributed subagent spend",
             percent(100.0 * unattributed / sidechain) if sidechain else "-",
@@ -1293,13 +1369,14 @@ def _verdict_section(window, previous, recommendations):
     return (
         '<section class="card verdict"><h2>%s</h2>'
         '<p class="sub">%s to %s, %s.</p>'
-        '<div class="tiles">%s</div>%s%s</section>'
+        '<div class="tiles">%s</div>%s%s%s</section>'
         % (
             esc(window["window"]["key"]),
             esc(window["window"]["start"]),
             esc(window["window"]["end"]),
             esc(window["window"]["timezone"]),
             "".join(tiles),
+            '<p class="notice">%s</p>' % esc(ceiling_change) if ceiling_change else "",
             _headroom_line(window, recommendations),
             _burn_chart(window),
         )
@@ -1475,7 +1552,7 @@ def _context_chart_html(chart):
     note = "x is turn order, not a clock; colour is the tool that grew it"
     if chart.get("compactions"):
         note += "; dashed = %s" % _plural(len(chart["compactions"]), "compaction")
-    note += "."
+    note += ". " + _binning_note(chart)
     rows = [
         [entry["tool"], exact(entry["tokens"]), exact(entry["results"])]
         for entry in chart["by_tool"]
@@ -1486,6 +1563,14 @@ def _context_chart_html(chart):
         esc(note),
         table_view(["tool", "context tokens it grew", "results"], rows, "Numbers"),
     )
+
+
+def _binning_note(chart):
+    turns = chart.get("turns") or chart.get("series_points") or len(chart["series"])
+    drawn = len(chart["series"])
+    if drawn >= (chart.get("series_points") or drawn):
+        return "%s turns, one point each." % exact(turns)
+    return "%s turns binned to %s points, each point the max of its bin." % (exact(turns), exact(drawn))
 
 
 def _timeline_chart_html(chart):
@@ -1989,7 +2074,15 @@ def _raw_section(parts):
     )
 
 
-NARRATIVE_WORDS = 120
+NARRATIVE_WORDS = 90
+
+NARRATIVE_SENTENCES = 3
+
+NARRATIVE_MAX_SENTENCES = 4
+
+NARRATIVE_RETRY_SENTENCES = 2
+
+NARRATIVE_ASK_WORDS = 75
 
 
 def _clip_words(text, limit):
@@ -1997,13 +2090,24 @@ def _clip_words(text, limit):
     return text if len(words) <= limit else " ".join(words[:limit]) + "..."
 
 
+def count_sentences(text):
+    return len([part for part in re.split(r"[.!?]+(?:\s|$)", text.strip()) if part.strip()])
+
+
+def over_narrative_cap(text):
+    return count_sentences(text) > NARRATIVE_MAX_SENTENCES or len(text.split()) > NARRATIVE_WORDS
+
+
+def narrative_off_note(note):
+    if note and "not on PATH" in note:
+        return "narrative off: claude not on PATH for the scheduled run"
+    return "narrative off: %s" % (note or "none written for this run")
+
+
 def _narrative_section(narrative):
     narrative = _clip_words(narrative, NARRATIVE_WORDS) if narrative else narrative
     if not narrative:
-        return (
-            '<p class="sub narrative-missing" data-narrative="">No narrative: writing one needs the '
-            "<code>claude</code> CLI on PATH.</p>"
-        )
+        return ""
     blocks = []
     bullets = []
     for line in narrative.strip().splitlines():
@@ -2037,12 +2141,16 @@ def format_stamp(window):
         '<meta name="report-window-weighted" content="%.4f">'
         '<meta name="report-window-turns" content="%d">'
         '<meta name="report-window-closed" content="%s">'
+        '<meta name="report-ceiling" content="%s">'
+        '<meta name="report-ceiling-method" content="%s">'
         % (
             REPORT_FORMAT_VERSION,
             esc(window["window"]["key"]),
             float(totals["weighted"]),
             int(round(totals["turns"])),
             "false" if window["window"].get("is_current") else "true",
+            "" if window["ceiling"].get("estimate") is None else "%.4f" % float(window["ceiling"]["estimate"]),
+            esc(window["ceiling"].get("method") or ""),
         )
     )
 
@@ -2090,6 +2198,8 @@ def read_stamp(path):
         "weighted": _number(_meta_value(text, "report-window-weighted"), float),
         "turns": _number(_meta_value(text, "report-window-turns"), int),
         "closed": _meta_value(text, "report-window-closed") == "true",
+        "ceiling": _number(_meta_value(text, "report-ceiling"), float),
+        "ceiling_method": _meta_value(text, "report-ceiling-method") or None,
         "narrative": narrative or None,
     }
 
@@ -2145,14 +2255,18 @@ def rebuild_stale(
                 file=sys.stderr,
             )
         narrative = stamp["narrative"] if stamp else None
+        note = None
         recommendations = advice.recommend(window, window["findings"], config)
         analysis, store = analysis_for(window, config, data_dir)
         if refresh_narrative:
             fresh, error = narrative_for(windows, window, config, recommendations, analysis)
             if error:
+                note = error
                 print("narrative skipped for %s: %s" % (window["window"]["key"], error), file=sys.stderr)
             narrative = fresh or narrative
-        write_report(windows, window, narrative, report_dir, recommendations, analysis, store, config)
+        write_report(
+            windows, window, narrative, report_dir, recommendations, analysis, store, config, narrative_note=note
+        )
         rebuilt.append(
             {
                 "key": window["window"]["key"],
@@ -2164,7 +2278,17 @@ def rebuild_stale(
     return rebuilt
 
 
-def render_html(windows, target, narrative=None, recommendations=None, analysis=None, store=None, config=None):
+def render_html(
+    windows,
+    target,
+    narrative=None,
+    recommendations=None,
+    analysis=None,
+    store=None,
+    config=None,
+    narrative_note=None,
+    ceiling_change=None,
+):
     store = store or empty_store()
     config = config or paths.shipped_config()
     previous = None
@@ -2190,16 +2314,17 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
     body = "".join(
         [
             "<header><h1>Claude token guardrail &mdash; %s</h1>" % esc(target["window"]["key"]),
-            '<p class="sub">%s &middot; %s files, %s records, %s malformed. Weighted tokens, not raw.</p>'
+            '<p class="sub">%s &middot; %s files, %s records, %s malformed. Weighted tokens, not raw.%s</p>'
             "</header>"
             % (
                 esc(target["generated_at"][:19].replace("T", " ")),
                 esc(exact(parse["files_scanned"])),
                 esc(exact(parse["records"])),
                 esc(exact(parse["malformed_lines"])),
+                "" if narrative else " &middot; " + esc(narrative_off_note(narrative_note)),
             ),
             _weights_notice(windows),
-            _verdict_section(target, previous, recommendations),
+            _verdict_section(target, previous, recommendations, ceiling_change),
             _change_section(target, previous),
             _narrative_section(narrative),
             _anomalies_section(target),
@@ -2219,10 +2344,19 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
     )
 
 
-def build_narrative_prompt(target, previous, rows=None, recommendations=None, analysis=None):
+def narrative_context_lines(extra_context):
+    if not extra_context:
+        return []
+    return ["What changed this window and what looks wrong:", str(extra_context).strip()]
+
+
+def build_narrative_prompt(
+    target, previous, rows=None, recommendations=None, analysis=None, extra_context=None,
+    sentences=None,
+):
     rows = (delta_block(target, previous) or {}).get("rows") or [] if rows is None else rows
     lines = [
-        "You are writing two short paragraphs for a personal Claude Code token-usage report.",
+        "You are writing the one-paragraph diagnosis at the top of a personal Claude Code token-usage report.",
         "Window %s (%s to %s), %s weighted tokens, %s of the ceiling."
         % (
             target["window"]["key"],
@@ -2286,41 +2420,81 @@ def build_narrative_prompt(target, previous, rows=None, recommendations=None, an
                 item["confidence"],
             )
         )
+    lines.extend(narrative_context_lines(extra_context))
     lines.append(
-        "Write plain prose, no headings, no markdown emphasis, at most 120 words: what drove this window, and "
-        "then ground the advice in the recommendations listed above, leading with the largest one. Never sum "
+        "Write plain prose, no headings, no markdown emphasis, at most %d sentences and %d words: what drove "
+        "this window, and then ground the advice in the recommendations listed above, leading with the largest "
+        "one. Never sum "
         "the overlapping findings, and never suggest using fewer subagents - heavy orchestration is the "
         "intended workflow; right-size the workers and the batch size instead. Name the jobs by the "
-        "descriptions above rather than by session hashes."
+        "descriptions above rather than by session hashes. Answer with the paragraph itself and nothing "
+        "else: no preamble, no word or sentence count, no closing remark."
+        % (sentences or NARRATIVE_SENTENCES, NARRATIVE_ASK_WORDS)
     )
     return "\n".join(lines)
+
+
+def _decoded(blob):
+    return blob.decode("utf-8", "replace") if isinstance(blob, bytes) else (blob or "")
 
 
 def fetch_narrative(prompt, timeout=180, model=DEFAULT_NARRATIVE_MODEL):
     executable = shutil.which("claude")
     if not executable:
         return None, "claude CLI not on PATH"
+    environment = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     try:
         result = subprocess.run(
-            [executable, "-p", prompt, "--model", model or DEFAULT_NARRATIVE_MODEL],
+            [
+                executable,
+                "-p",
+                prompt,
+                "--model",
+                model or DEFAULT_NARRATIVE_MODEL,
+                "--output-format",
+                "text",
+            ],
             capture_output=True,
-            text=True,
             timeout=timeout,
+            env=environment,
         )
     except (OSError, subprocess.SubprocessError) as error:
         return None, str(error)
     if result.returncode != 0:
-        return None, (result.stderr or "").strip()[:300] or "exit code %d" % result.returncode
-    text = (result.stdout or "").strip()
+        return None, _decoded(result.stderr).strip()[:300] or "exit code %d" % result.returncode
+    text = _decoded(result.stdout).strip()
     return (text, None) if text else (None, "empty response")
 
 
-def write_report(windows, target, narrative, report_dir=None, recommendations=None, analysis=None, store=None, config=None):
+def write_report(
+    windows,
+    target,
+    narrative,
+    report_dir=None,
+    recommendations=None,
+    analysis=None,
+    store=None,
+    config=None,
+    narrative_note=None,
+):
     report_dir = report_dir or default_report_dir()
     os.makedirs(report_dir, exist_ok=True)
     path = os.path.join(report_dir, "%s.html" % target["window"]["key"])
+    change = ceiling_change_note(read_stamp(path), target["ceiling"])
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write(render_html(windows, target, narrative, recommendations, analysis, store, config))
+        handle.write(
+            render_html(
+                windows,
+                target,
+                narrative,
+                recommendations,
+                analysis,
+                store,
+                config,
+                narrative_note=narrative_note,
+                ceiling_change=change,
+            )
+        )
     return path
 
 
@@ -2373,16 +2547,32 @@ def console_summary(windows, target, recommendations=None):
     return "\n".join(lines)
 
 
-def narrative_for(windows, target, config, recommendations=None, analysis=None):
+def narrative_for(windows, target, config, recommendations=None, analysis=None, extra_context=None):
     if recommendations is None:
         recommendations = advice.recommend(target, target["findings"], config)
     index = [w["window"]["key"] for w in windows].index(target["window"]["key"])
     previous = windows[index - 1] if index else None
     rows = decompose_delta(previous, target) if previous else []
-    return fetch_narrative(
-        build_narrative_prompt(target, previous, rows, recommendations, analysis),
-        model=config.get("narrative_model"),
-    )
+    if extra_context is None:
+        extra_context = narrative_context(target, previous)
+
+    def ask(sentences):
+        return fetch_narrative(
+            build_narrative_prompt(
+                target, previous, rows, recommendations, analysis, extra_context, sentences
+            ),
+            model=config.get("narrative_model"),
+        )
+
+    text, error = ask(NARRATIVE_SENTENCES)
+    if text and over_narrative_cap(text):
+        text, error = ask(NARRATIVE_RETRY_SENTENCES)
+        if text and over_narrative_cap(text):
+            return None, "the answer ran past %d sentences or %d words twice" % (
+                NARRATIVE_MAX_SENTENCES,
+                NARRATIVE_WORDS,
+            )
+    return text, error
 
 
 def rebuild_summary(rebuilt, windows):
@@ -2431,12 +2621,17 @@ def main(argv=None):
 
     analysis, store = analysis_for(target, config, data_dir)
     narrative = None
+    narrative_note = "the narrative call was skipped for this run" if args.no_narrative else None
     if not args.no_narrative:
         narrative, error = narrative_for(windows, target, config, recommendations, analysis)
         if error:
+            narrative_note = error
             print("narrative skipped: %s" % error, file=sys.stderr)
 
-    path = write_report(windows, target, narrative, report_dir, recommendations, analysis, store, config)
+    path = write_report(
+        windows, target, narrative, report_dir, recommendations, analysis, store, config,
+        narrative_note=narrative_note,
+    )
     rebuilt = rebuild_stale(
         windows,
         config,

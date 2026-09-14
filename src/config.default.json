@@ -114,6 +114,8 @@
     ],
     "min_saving": 250000,
     "min_cost": 250000,
+    "min_saving_share": 0.01,
+    "min_reported_share": 0.03,
     "windows": 4,
     "min_windows_for_proposal": 2
   },

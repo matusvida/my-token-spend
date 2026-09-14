@@ -68,6 +68,8 @@ def _context_chart(window, finding):
     return {
         "kind": "context_series",
         "series": summary["series"],
+        "series_points": summary.get("series_points") or len(summary["series"]),
+        "turns": summary.get("turns"),
         "threshold": (window.get("context") or {}).get("threshold"),
         "compactions": summary.get("compaction_ts") or [],
         "by_tool": summary.get("growth_by_tool") or [],

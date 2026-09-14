@@ -32,7 +32,11 @@ DEFAULTS = {
     "coverage_floor": 0.9,
     "cost_per_use_multiple": 2.0,
     "quiet_invocation_turns": 2,
+    "min_saving_share": 0.01,
+    "min_reported_share": 0.03,
 }
+
+STATE_FILENAME = "tune_last.json"
 
 HONESTY = (
     "This report measures COST only. Accuracy and answer quality are not recorded anywhere in this "
@@ -79,6 +83,86 @@ def subagent_model_setting(user_home=None):
 
 
 
+
+
+def state_file(data_dir):
+    return Path(data_dir) / STATE_FILENAME
+
+
+def load_state(data_dir):
+    try:
+        payload = json.loads(state_file(data_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def state_of(result):
+    return {
+        "generated_at": result["generated_at"],
+        "windows": [window["key"] for window in result["windows"]],
+        "proposals": _proposal_figures(result),
+        "decisions": [
+            {"name": row["name"], "typical_weighted": row["typical_weighted"]}
+            for row in result["decisions"]
+        ],
+    }
+
+
+def save_state(data_dir, result):
+    target = state_file(data_dir)
+    target.write_text(json.dumps(state_of(result), indent=2, sort_keys=True), encoding="utf-8")
+    return target
+
+
+def _proposal_figures(result):
+    rows = []
+    for kind, key in (
+        (PROPOSAL, "proposals"),
+        (SETTING_PROPOSAL, "setting_proposals"),
+        (UPGRADE_PROPOSAL, "upgrade_proposals"),
+    ):
+        for entry in result[key]:
+            figure = (
+                entry["weighted_cost_increase"] if kind == UPGRADE_PROPOSAL else entry["weighted_saving"]
+            )
+            rows.append(
+                {
+                    "component": entry["component"],
+                    "name": entry["name"],
+                    "kind": kind,
+                    "weighted": figure,
+                }
+            )
+    return rows
+
+
+def _movement(previous, result):
+    rows_now = {(r["component"], r["name"], r["kind"]): r["weighted"] for r in _proposal_figures(result)}
+    if not previous:
+        return {"first_run": True, "generated_at": None, "windows": [], "rows": []}
+    rows_then = {
+        (r.get("component"), r.get("name"), r.get("kind")): r.get("weighted")
+        for r in previous.get("proposals") or []
+        if r.get("name")
+    }
+    rows = [
+        {
+            "component": key[0],
+            "name": key[1],
+            "kind": key[2],
+            "then": rows_then.get(key),
+            "now": rows_now.get(key),
+        }
+        for key in set(rows_then) | set(rows_now)
+    ]
+    rows.sort(key=lambda row: (-max(row["then"] or 0.0, row["now"] or 0.0), row["name"]))
+    return {
+        "first_run": False,
+        "generated_at": previous.get("generated_at"),
+        "windows": previous.get("windows") or [],
+        "rows": rows,
+    }
 
 
 def median(values):
@@ -164,16 +248,22 @@ def _invocation_stats(records, component, name):
             groups[record.get(key_field) or record.get("sessionId")].append(record)
     spans = []
     quiet = 0
+    thinking = []
+    output = []
     for group in groups.values():
         stamps = sorted(_parse_ts(record["ts"]) for record in group)
         spans.append((stamps[-1] - stamps[0]).total_seconds())
         if len(group) <= DEFAULTS["quiet_invocation_turns"]:
             quiet += 1
+        thinking.extend(record.get("thinking") or 0 for record in group)
+        output.extend(record.get("output") or 0 for record in group)
     return {
         "invocations": len(groups),
         "invocation_unit": "agent run" if component == "agent" else "session",
         "median_wall_clock_seconds": median(spans) if spans else 0.0,
         "quiet_invocations": quiet,
+        "thinking": thinking,
+        "output": output,
     }
 
 
@@ -217,6 +307,8 @@ def collect_centres(windows, records_by_window, settings_map, config):
                         "invocations": 0,
                         "quiet_invocations": 0,
                         "wall_clocks": [],
+                        "thinking_per_turn": [],
+                        "output_per_turn": [],
                         "trivial_per_window": {},
                         "trivial_turns": 0,
                         "invocation_unit": "agent run" if component == "agent" else "session",
@@ -231,6 +323,8 @@ def collect_centres(windows, records_by_window, settings_map, config):
                 stats = _invocation_stats(records, component, bucket["key"])
                 centre["invocations"] += stats["invocations"]
                 centre["quiet_invocations"] += stats["quiet_invocations"]
+                centre["thinking_per_turn"].extend(stats["thinking"])
+                centre["output_per_turn"].extend(stats["output"])
                 if stats["median_wall_clock_seconds"]:
                     centre["wall_clocks"].append(stats["median_wall_clock_seconds"])
 
@@ -249,6 +343,8 @@ def collect_centres(windows, records_by_window, settings_map, config):
             centre["total_weighted"] / centre["invocations"] if centre["invocations"] else None
         )
         centre["median_wall_clock_seconds"] = median(centre["wall_clocks"]) if centre["wall_clocks"] else None
+        centre["median_thinking_per_turn"] = median(centre["thinking_per_turn"])
+        centre["median_output_per_turn"] = median(centre["output_per_turn"])
         centre["weighted_per_turn"] = centre["total_weighted"] / centre["turns"] if centre["turns"] else 0.0
     ranked = sorted(centres.values(), key=lambda c: (-c["typical_weighted"], -c["total_weighted"], c["name"]))
     per_use = [c["weighted_per_invocation"] for c in ranked if c["weighted_per_invocation"]]
@@ -720,13 +816,12 @@ def _skill_entry(centre, roots):
     status = AMBIGUOUS if len(matches) > 1 else NOT_ASSESSABLE
     fields = agentfiles.read_frontmatter(agentfiles._read(matches[0]))[0]
     description = fields.get("description") or ""
-    body = len(agentfiles._read(matches[0]))
     if len(matches) > 1:
         note = "the name resolves to %d files; which one ran is not recorded." % len(matches)
     else:
         note = (
-            "cost is the turns attributed to this skill, not the cost of loading it. Its file is %s bytes "
-            "and its description is %d characters." % ("{:,}".format(body), len(description))
+            "cost is the turns attributed to this skill, not the cost of loading it. Its description is "
+            "%d characters." % len(description)
         )
     return _entry(
         centre,
@@ -737,8 +832,33 @@ def _skill_entry(centre, roots):
         performance_risk="unknown",
         quality_risk="Cannot be assessed from spend data alone.",
         description_chars=len(description),
-        file_bytes=body,
     )
+
+
+def _decisions(centres, config, settings_map, config_path):
+    advice_settings = advice._settings(config)
+    classified = set(advice_settings["sonnet_class_agents"]) | set(advice_settings["opus_class_agents"])
+    rows = [
+        {
+            "name": centre["name"],
+            "typical_weighted": centre["typical_weighted"],
+            "peak_weighted": centre["peak_weighted"],
+            "turns": centre["turns"],
+            "invocations": centre["invocations"],
+            "invocation_unit": centre["invocation_unit"],
+            "median_thinking_per_turn": centre["median_thinking_per_turn"],
+            "median_output_per_turn": centre["median_output_per_turn"],
+            "config_line": '"%s",' % centre["name"],
+            "config_path": config_path,
+            "lists": ["advice.sonnet_class_agents", "advice.opus_class_agents"],
+        }
+        for centre in centres
+        if centre["component"] == "agent"
+        and centre["name"] not in classified
+        and max(centre["typical_weighted"], centre["peak_weighted"]) >= settings_map["min_cost"]
+    ]
+    rows.sort(key=lambda row: (-row["typical_weighted"], -row["peak_weighted"], row["name"]))
+    return rows
 
 
 def unused_quota(windows):
@@ -843,6 +963,8 @@ def build(
     open_window=None,
     now=None,
     setting=None,
+    previous_state=None,
+    config_path=None,
 ):
     settings_map = settings(config)
     settings_map["min_windows_for_proposal"] = min(settings_map["min_windows_for_proposal"], len(windows))
@@ -851,6 +973,8 @@ def build(
     records_by_window = records_by_window or {}
     roots = roots if roots is not None else agentfiles.default_roots(project_dirs=project_dirs(windows))
     setting = setting if setting is not None else subagent_model_setting()
+    config_path = config_path if config_path is not None else str(paths.config_path())
+    typical_window = median([data["totals"]["weighted"] for data in windows])
     latest = windows[-1]
     ceiling = (latest.get("ceiling") or {}).get("estimate")
 
@@ -876,8 +1000,13 @@ def build(
         (e for e in entries if e["status"] == UPGRADE_PROPOSAL),
         key=lambda e: (-e["weighted_cost_increase"], e["name"]),
     )
+    folded_setting_proposals = [
+        e
+        for e in setting_proposals
+        if typical_window and e["weighted_saving"] < settings_map["min_saving_share"] * typical_window
+    ]
     proposed = (PROPOSAL, SETTING_PROPOSAL, UPGRADE_PROPOSAL)
-    reported = sorted(
+    above_floor = sorted(
         (
             e
             for e in entries
@@ -886,6 +1015,11 @@ def build(
         ),
         key=lambda e: (-e["typical_weighted"], -e["peak_weighted"], e["name"]),
     )
+    reported_floor = settings_map["min_reported_share"] * typical_window
+    reported = [
+        e for e in above_floor if max(e["typical_weighted"], e["peak_weighted"]) >= reported_floor
+    ]
+    below_share = [e for e in above_floor if e not in reported]
     hidden = [
         e
         for e in entries
@@ -901,7 +1035,7 @@ def build(
             bucket["turns"] += centre["turns"]
             bucket["centres"] += 1
 
-    return {
+    result = {
         "generated_at": now.isoformat(),
         "windows": [
             {
@@ -942,21 +1076,31 @@ def build(
         },
         "min_saving": settings_map["min_saving"],
         "min_cost": settings_map["min_cost"],
+        "min_saving_share": settings_map["min_saving_share"],
+        "min_reported_share": settings_map["min_reported_share"],
+        "typical_window_weighted": typical_window,
+        "config_path": config_path,
         "min_windows_for_proposal": settings_map["min_windows_for_proposal"],
         "single_window": len(windows) == 1,
         "proposals": proposals,
         "setting_proposals": setting_proposals,
+        "folded_setting_proposals": folded_setting_proposals,
         "upgrade_proposals": upgrade_proposals,
+        "decisions": _decisions(centres, config, settings_map, config_path),
         "unused_quota": headroom,
         "subagent_model_setting": setting,
         "reconciliation": _reconciliation(
             windows, current, entries, proposals, setting_proposals, config, open_window=open_window, now=now
         ),
         "reported": reported,
+        "below_share": below_share,
+        "reported_below_share": len(below_share),
         "hidden_below_min_cost": len(hidden),
         "roots": [str(root["path"]) for root in roots],
         "applies_changes": False,
     }
+    result["movement"] = _movement(previous_state, result)
+    return result
 
 
 def _num(value):
@@ -1004,9 +1148,94 @@ def _bar(fraction, width=24):
     return "#" * filled + "." * (width - filled)
 
 
+def _render_decisions(result, lines):
+    rows = result["decisions"]
+    lines.append("1. DECISIONS THIS DATA NEEDS FROM YOU (%d)" % len(rows))
+    if not rows:
+        lines.append(
+            "   none: every agent type above the %s weighted floor is already listed in "
+            "advice.sonnet_class_agents or advice.opus_class_agents in %s."
+            % (_num(result["min_cost"]), result["config_path"])
+        )
+        return
+    lines.append(
+        "   these agent types cost more than the %s weighted floor and are on neither "
+        "advice.sonnet_class_agents nor advice.opus_class_agents in %s, so which tier their work needs "
+        "has not been judged and no section below proposes anything about them. Only you can answer this: "
+        "the data records what each one cost, never whether its answers needed the tier."
+        % (_num(result["min_cost"]), result["config_path"])
+    )
+    for row in rows:
+        lines.append("")
+        lines.append(
+            "   %-34s %8s typical/window  %5d %s(s)  median %s thinking/turn  median %s output/turn"
+            % (
+                row["name"][:34],
+                _short(row["typical_weighted"]),
+                row["invocations"],
+                row["invocation_unit"],
+                "{:,.0f}".format(row["median_thinking_per_turn"]),
+                "{:,.0f}".format(row["median_output_per_turn"]),
+            )
+        )
+        if row["typical_weighted"] < result["min_cost"]:
+            lines.append(
+                "     it is here on one heavy window of %s, not on a typical one."
+                % _short(row["peak_weighted"])
+            )
+        lines.append(
+            "     add the line %s to advice.sonnet_class_agents or advice.opus_class_agents"
+            % row["config_line"]
+        )
+    lines.append("")
+    lines.append("   classify these and the next run prices them.")
+
+
+def _render_movement(result, lines):
+    movement = result["movement"]
+    lines.append("2. WHAT MOVED SINCE LAST RUN")
+    if movement["first_run"]:
+        lines.append(
+            "   no previous tune run is recorded, so there is nothing to compare. This run is stored in "
+            "%s and the next one compares against it." % STATE_FILENAME
+        )
+        return
+    lines.append(
+        "   against the previous run of %s over %s."
+        % (
+            (movement["generated_at"] or "an unrecorded time")[:16].replace("T", " "),
+            ", ".join(movement["windows"]) or "windows it did not record",
+        )
+    )
+    if not movement["rows"]:
+        lines.append("   neither run produced a proposal, so nothing moved.")
+        return
+    for row in movement["rows"]:
+        if row["then"] is None:
+            state = "new this run"
+        elif row["now"] is None:
+            state = "no longer proposed"
+        else:
+            state = "%+.0f%%" % (100.0 * (row["now"] - row["then"]) / row["then"]) if row["then"] else "n/a"
+        lines.append(
+            "     %-34s %-17s then %8s   now %8s   %s"
+            % (
+                row["name"][:34],
+                STATUS_LABEL[row["kind"]],
+                _short(row["then"]),
+                _short(row["now"]),
+                state,
+            )
+        )
+    lines.append(
+        "   a figure that moved is the priced estimate moving, not a measured saving: the windows "
+        "analysed are different windows."
+    )
+
+
 def _render_pacing(result, lines):
     ceiling = result["ceiling"]
-    lines.append("1. PACING AND EXHAUSTION")
+    lines.append("3. PACING AND EXHAUSTION")
     block = {"method": result["ceiling_method"], **(result.get("ceiling_detail") or {})}
     phrase = collect.ceiling_phrase(block)
     lines.append("   ceiling %s weighted - %s." % (_num(ceiling), phrase))
@@ -1123,7 +1352,7 @@ def _render_pacing(result, lines):
 
 
 def _render_centres(result, lines):
-    lines.append("2. CONSISTENT COST CENTRES across %d window(s)" % len(result["windows"]))
+    lines.append("4. CONSISTENT COST CENTRES across %d window(s)" % len(result["windows"]))
     lines.append(
         "   ranked by TYPICAL (median) cost per window, not by peak, so one heavy week cannot promote a "
         "component that is usually cheap. 'seen' is how many of the analysed windows it ran in."
@@ -1179,7 +1408,7 @@ def _render_centres(result, lines):
 
 
 def _render_round_trips(result, lines):
-    lines.append("3. WASTED ROUND TRIPS")
+    lines.append("5. WASTED ROUND TRIPS")
     for window in result.get("round_trips") or []:
         coverage = window["result_coverage"]
         lines.append("")
@@ -1278,7 +1507,7 @@ def _render_entry(entry, indent="  "):
 
 
 def _render_upgrade_proposals(result, lines):
-    lines.append("4b. UPGRADE PROPOSALS (%d)" % len(result["upgrade_proposals"]))
+    lines.append("6b. UPGRADE PROPOSALS (%d)" % len(result["upgrade_proposals"]))
     if not result["unused_quota"]:
         lines.append(
             "   none: no analysed window closed with quota measurably unused, so there is no headroom to "
@@ -1301,7 +1530,7 @@ def _render_upgrade_proposals(result, lines):
 
 def _render_setting_proposals(result, lines):
     setting = result["subagent_model_setting"]
-    lines.append("5. SETTING-LEVEL PROPOSALS (%d)" % len(result["setting_proposals"]))
+    lines.append("7. SETTING-LEVEL PROPOSALS (%d)" % len(result["setting_proposals"]))
     lines.append(
         "   built-in agent types have no definition file. Their tier comes from `env.%s` in %s and from the "
         "`model` argument on each Agent call, so a proposal here names a setting instead of a patch."
@@ -1324,14 +1553,38 @@ def _render_setting_proposals(result, lines):
         "   every entry below points at the SAME global default, so setting it moves all of them at once. "
         "The `model` argument on an individual Agent call is the narrower lever."
     )
+    folded = result["folded_setting_proposals"]
     for entry in result["setting_proposals"]:
+        if entry in folded:
+            continue
         lines.append("")
         lines.extend(_render_entry(entry))
+    if folded:
+        lines.append("")
+        lines.append(
+            "   %d setting-level proposal(s) are worth below %.0f%% of a typical window and are folded "
+            "into this line rather than argued: %s."
+            % (
+                len(folded),
+                100 * result["min_saving_share"],
+                ", ".join(
+                    "%s %s (%.2f%%)"
+                    % (
+                        entry["name"],
+                        _short(entry["weighted_saving"]),
+                        100 * entry["weighted_saving"] / result["typical_window_weighted"]
+                        if result["typical_window_weighted"]
+                        else 0.0,
+                    )
+                    for entry in folded
+                ),
+            )
+        )
 
 
 def _render_reconciliation(result, lines):
     data = result["reconciliation"]
-    lines.append("6. RECONCILIATION WITH THE WEEKLY REPORT")
+    lines.append("8. RECONCILIATION WITH THE WEEKLY REPORT")
     if data["current_window_weighted"] is None:
         if data["open_window_selected"]:
             lines.append(
@@ -1390,6 +1643,10 @@ def render(result):
         )
         lines.append("")
 
+    _render_decisions(result, lines)
+    lines.append("")
+    _render_movement(result, lines)
+    lines.append("")
     _render_pacing(result, lines)
     lines.append("")
     _render_centres(result, lines)
@@ -1398,7 +1655,7 @@ def render(result):
     lines.append("")
 
     basis = result["saving_basis"]
-    lines.append("4. FILE-LEVEL PROPOSALS (%d)" % len(result["proposals"]))
+    lines.append("6. FILE-LEVEL PROPOSALS (%d)" % len(result["proposals"]))
     lines.append(
         "   saving basis: the component's TYPICAL cost per window x %.0f%% of the window that ran above %s "
         "x the %.0f%% price gap. Upper bounds; they overlap rather than adding up. Nothing below %d of %d "
@@ -1430,7 +1687,12 @@ def render(result):
     _render_reconciliation(result, lines)
 
     lines.append("")
-    lines.append("7. COST WITHOUT A PROPOSAL (%d)" % len(result["reported"]))
+    lines.append("9. COST WITHOUT A PROPOSAL (%d)" % len(result["reported"]))
+    lines.append(
+        "   the agents and skills that cost at least %.0f%% of a typical window (%s weighted) and that "
+        "nothing above can propose a change to."
+        % (100 * result["min_reported_share"], _short(result["typical_window_weighted"]))
+    )
     for entry in result["reported"]:
         lines.append("")
         lines.extend(_render_entry(entry))
@@ -1438,6 +1700,13 @@ def render(result):
     lines.extend(
         [
             "",
+            "%d further component(s) cleared the %s weighted floor but stayed below %.0f%% of a typical "
+            "window and are not listed."
+            % (
+                result["reported_below_share"],
+                _num(result["min_cost"]),
+                100 * result["min_reported_share"],
+            ),
             "%d further component(s) typically cost less than the %s weighted floor and are not listed."
             % (result["hidden_below_min_cost"], _num(result["min_cost"])),
             "",

@@ -296,3 +296,11 @@ def test_the_narrative_context_is_empty_when_there_is_nothing_to_say():
     window["anomalies"] = []
     window["delta"] = {"comparable": False, "reason": "no previous window to compare", "rows": [], "claim": None}
     assert report.narrative_context(window, None) == ""
+
+
+def test_the_narrative_prompt_is_handed_the_delta_and_anomaly_claims():
+    previous, window, records = pair()
+    window["anomalies"] = [anomaly()]
+    prompt = report.build_narrative_prompt(window, previous, extra_context=report.narrative_context(window, previous))
+    assert "What changed this window and what looks wrong" in prompt
+    assert "MCP server cost 92,799,908" in prompt

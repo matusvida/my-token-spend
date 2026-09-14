@@ -187,9 +187,9 @@ def test_a_long_narrative_is_clipped_to_its_cap():
     window, records, calls = real_shaped()
     html = rendered(window, records, calls, narrative=" ".join("word%d" % index for index in range(400)))
     body = html.split("<h2>Why this week looked like this</h2>")[1].split("</section>")[0]
-    assert "word119" in body
-    assert "word120" not in body
-    assert report.NARRATIVE_WORDS == 120
+    assert "word89" in body
+    assert "word90" not in body
+    assert report.NARRATIVE_WORDS == 90
 
 
 def _recommendations(window):
