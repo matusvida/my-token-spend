@@ -584,10 +584,11 @@ def test_an_over_long_narrative_is_refused_and_asked_again_with_a_shorter_cap(mo
 
 def test_a_narrative_still_over_the_cap_after_the_retry_is_dropped(monkeypatch):
     windows = [make_window()]
-    monkeypatch.setattr(report, "fetch_narrative", lambda prompt, timeout=180, model=None: ("One. Two. Three. Four. Five.", None))
+    answer = " ".join(["word"] * 170)
+    monkeypatch.setattr(report, "fetch_narrative", lambda prompt, timeout=180, model=None: (answer, None))
     text, error = report.narrative_for(windows, windows[0], CONFIG, recommendations=[])
     assert text is None
-    assert error == "narrative refused twice (5 words)"
+    assert error == "narrative refused twice (170 words)"
 
 
 def test_console_summary_leads_with_the_budget_and_top_causes():
@@ -2235,12 +2236,12 @@ def test_a_refusal_is_recorded_and_named_instead_of_being_retried(tmp_path, monk
 
     def fake(prompt, timeout=180, model=None):
         calls.append(prompt)
-        return "One. Two. Three. Four. Five. Six.", None
+        return " ".join(["word"] * 200), None
 
     monkeypatch.setattr(report, "fetch_narrative", fake)
     assert report.main(argv) == 0
     page = Path(os.path.join(report_dir, "week_2026_08_15.html")).read_text(encoding="utf-8")
-    assert "narrative refused twice (6 words)" in page
+    assert "narrative refused twice (200 words)" in page
     assert "narrative off: narrative refused" not in page
     assert len(calls) == 4
     downgrade_stamp(os.path.join(report_dir, "week_2026_08_15.html"))
@@ -2254,7 +2255,7 @@ def test_a_refusal_on_the_open_window_is_not_recorded_against_it(tmp_path, monke
     report_dir = str(tmp_path / "reports")
     argv = ["--data-dir", data_dir, "--report-dir", report_dir]
     monkeypatch.setattr(
-        report, "fetch_narrative", lambda prompt, timeout=180, model=None: ("One. Two. Three. Four. Five. Six.", None)
+        report, "fetch_narrative", lambda prompt, timeout=180, model=None: (" ".join(["word"] * 200), None)
     )
     assert report.main(argv) == 0
     stored = report.load_narratives(data_dir)
@@ -2324,3 +2325,68 @@ def test_a_mostly_named_subagent_lane_does_not_warn():
     verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
     assert '<div class="tile warn">' not in verdict
     assert "dispatched with no subagent_type" not in verdict
+
+
+def _sentence(head, words):
+    return head + " " + " ".join(["word"] * (words - 2)) + " end."
+
+
+def _narrative_run(monkeypatch, answers):
+    windows = [make_window()]
+    asked = []
+
+    def fake(prompt, timeout=180, model=None):
+        asked.append(prompt)
+        return answers[min(len(asked) - 1, len(answers) - 1)], None
+
+    monkeypatch.setattr(report, "fetch_narrative", fake)
+    text, note = report.narrative_for(windows, windows[0], CONFIG, recommendations=[])
+    return text, note, asked
+
+
+def test_a_narrative_inside_the_word_cap_is_accepted_verbatim(monkeypatch):
+    answer = _sentence("Alpha", 40) + " " + _sentence("Beta", 45)
+    assert len(answer.split()) == 85
+    text, note, asked = _narrative_run(monkeypatch, [answer])
+    assert text == answer
+    assert note is None
+    assert len(asked) == 1
+
+
+def test_a_narrative_over_the_cap_but_under_the_trim_limit_is_cut_at_a_sentence(monkeypatch):
+    parts = [_sentence(head, 30) for head in ("Alpha", "Beta", "Gamma", "Delta")]
+    answer = " ".join(parts)
+    assert len(answer.split()) == 120
+    text, note, asked = _narrative_run(monkeypatch, [answer])
+    assert text == " ".join(parts[:3])
+    assert len(text.split()) == 90
+    assert text.endswith("end.")
+    assert note == "narrative trimmed to 90 words"
+    assert len(asked) == 1
+
+
+def test_a_trim_never_splits_on_an_abbreviation(monkeypatch):
+    first = "Alpha the fan-out, e.g. the review agents, " + " ".join(["word"] * 42) + " end."
+    assert len(first.split()) == 50
+    answer = first + " " + _sentence("Beta", 50)
+    text, note, asked = _narrative_run(monkeypatch, [answer])
+    assert text == first
+    assert "e.g. the review agents" in text
+    assert not text.endswith("e.g.")
+    assert note == "narrative trimmed to 50 words"
+
+
+def test_a_narrative_over_the_trim_limit_is_refused_and_asked_again(monkeypatch):
+    short = _sentence("Alpha", 20)
+    text, note, asked = _narrative_run(monkeypatch, [" ".join(["word"] * 200), short])
+    assert text == short
+    assert note is None
+    assert len(asked) == 2
+    assert "at most 2 sentences" in asked[1]
+
+
+def test_a_narrative_over_the_trim_limit_twice_is_dropped(monkeypatch):
+    text, note, asked = _narrative_run(monkeypatch, [" ".join(["word"] * 200)])
+    assert text is None
+    assert note == "narrative refused twice (200 words)"
+    assert len(asked) == 2

@@ -2161,18 +2161,45 @@ NARRATIVE_RETRY_SENTENCES = 2
 
 NARRATIVE_ASK_WORDS = 75
 
+NARRATIVE_TRIM_WORDS = 160
+
+NARRATIVE_TRIMMED = "narrative trimmed to %d words"
+
 
 def _clip_words(text, limit):
     words = text.split()
     return text if len(words) <= limit else " ".join(words[:limit]) + "..."
 
 
-def count_sentences(text):
-    return len([part for part in re.split(r"[.!?]+(?:\s|$)", text.strip()) if part.strip()])
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[]*[A-Z0-9])")
 
 
-def over_narrative_cap(text):
-    return count_sentences(text) > NARRATIVE_MAX_SENTENCES or len(text.split()) > NARRATIVE_WORDS
+def split_sentences(text):
+    return [part.strip() for part in _SENTENCE_BREAK.split(text.strip()) if part.strip()]
+
+
+def trim_narrative(text):
+    kept = []
+    words = 0
+    for sentence in split_sentences(text):
+        length = len(sentence.split())
+        if words + length > NARRATIVE_WORDS or len(kept) >= NARRATIVE_MAX_SENTENCES:
+            break
+        kept.append(sentence)
+        words += length
+    return " ".join(kept) if kept else None
+
+
+def accept_narrative(text):
+    words = len(text.split())
+    if words <= NARRATIVE_WORDS:
+        return text, None
+    if words > NARRATIVE_TRIM_WORDS:
+        return None, None
+    trimmed = trim_narrative(text)
+    if not trimmed:
+        return None, None
+    return trimmed, NARRATIVE_TRIMMED % len(trimmed.split())
 
 
 NARRATIVE_WRITTEN = "narrative written"
@@ -2192,7 +2219,9 @@ def narrative_off_note(note):
 
 def narrative_status(narrative, note):
     if narrative:
-        return NARRATIVE_REUSED if note == NARRATIVE_REUSED else NARRATIVE_WRITTEN
+        if note == NARRATIVE_REUSED or (note or "").startswith("narrative trimmed to "):
+            return note
+        return NARRATIVE_WRITTEN
     return narrative_off_note(note)
 
 
@@ -2381,12 +2410,12 @@ def rebuild_stale(
         analysis, store = analysis_for(window, config, data_dir)
         never_asked = narrative is None and "narrative" not in entry
         if refresh_narrative or (never_asked and not no_narrative):
-            fresh, error = narrative_for(windows, window, config, recommendations, analysis)
-            if error:
-                note = error
-                print("narrative skipped for %s: %s" % (key, error), file=sys.stderr)
-            elif fresh:
-                note = NARRATIVE_WRITTEN
+            fresh, outcome = narrative_for(windows, window, config, recommendations, analysis)
+            if fresh:
+                note = outcome or NARRATIVE_WRITTEN
+            elif outcome:
+                note = outcome
+                print("narrative skipped for %s: %s" % (key, outcome), file=sys.stderr)
             narrative = fresh or narrative
             if fresh or not window["window"].get("is_current"):
                 stored = store_narrative(data_dir, key, fresh, note)
@@ -2701,11 +2730,18 @@ def narrative_for(windows, target, config, recommendations=None, analysis=None, 
         )
 
     text, error = ask(NARRATIVE_SENTENCES)
-    if text and over_narrative_cap(text):
-        text, error = ask(NARRATIVE_RETRY_SENTENCES)
-        if text and over_narrative_cap(text):
-            return None, "narrative refused twice (%d words)" % len(text.split())
-    return text, error
+    if not text:
+        return None, error
+    accepted, note = accept_narrative(text)
+    if accepted:
+        return accepted, note
+    text, error = ask(NARRATIVE_RETRY_SENTENCES)
+    if not text:
+        return None, error
+    accepted, note = accept_narrative(text)
+    if accepted:
+        return accepted, note
+    return None, "narrative refused twice (%d words)" % len(text.split())
 
 
 def rebuild_summary(rebuilt, windows):
@@ -2756,12 +2792,12 @@ def main(argv=None):
     narrative = None
     narrative_note = "the narrative call was skipped for this run" if args.no_narrative else None
     if not args.no_narrative:
-        narrative, error = narrative_for(windows, target, config, recommendations, analysis)
-        if error:
-            narrative_note = error
-            print("narrative skipped: %s" % error, file=sys.stderr)
-        elif narrative:
-            narrative_note = NARRATIVE_WRITTEN
+        narrative, outcome = narrative_for(windows, target, config, recommendations, analysis)
+        if narrative:
+            narrative_note = outcome or NARRATIVE_WRITTEN
+        elif outcome:
+            narrative_note = outcome
+            print("narrative skipped: %s" % outcome, file=sys.stderr)
         if narrative or not target["window"].get("is_current"):
             store_narrative(data_dir, target["window"]["key"], narrative, narrative_note)
 

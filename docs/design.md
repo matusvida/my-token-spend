@@ -514,7 +514,8 @@ self-contained HTML page. The reading path is, in order:
 3. **Why this week looked like this** — the narrative, capped at four sentences and 90 words, and
    handed the delta claim and the anomaly claims as its context. When no narrative exists neither the
    heading nor the section is rendered. The header meta line always states the outcome: *narrative
-   written*, *narrative reused*, or *narrative off: <reason>* — never a bare absence.
+   written*, *narrative trimmed to N words*, *narrative reused*, or *narrative off: <reason>* — never
+   a bare absence.
 4. **What looks wrong** — the anomaly lane, read from the window's stored `anomalies`. At most
    `report.ANOMALY_CARDS` (5) cards, ranked by score, and a line counting the rest. Each card is a
    claim with its measured numbers, one chart or table, the concrete action, and the coverage of the
@@ -620,10 +621,14 @@ The call asks for `--output-format text` and reads the child's bytes itself, dec
 mojibake on Windows. The prompt asks for at most `NARRATIVE_SENTENCES` (3) sentences and
 `NARRATIVE_ASK_WORDS` (75) words, deliberately under the refusal threshold, since a model asked for
 exactly the limit lands a word or two over it; it is also told to answer with the paragraph alone,
-because a preamble stating its own word count is what pushed a compliant answer past the cap. An answer
-longer than `NARRATIVE_MAX_SENTENCES` (4) sentences or `NARRATIVE_WORDS` (90) words is refused and
-asked once more under a two-sentence cap; a second over-long answer is dropped and the page says so
-rather than printing a wall of prose. `build_narrative_prompt` takes an optional `extra_context`
+because a preamble stating its own word count is what pushed a compliant answer past the cap. An answer of
+`NARRATIVE_WORDS` (90) words or fewer is taken verbatim. Between 91 and `NARRATIVE_TRIM_WORDS` (160)
+words it is trimmed to the last whole sentence that still fits inside 90 words and at most
+`NARRATIVE_MAX_SENTENCES` (4) sentences, and the header says *narrative trimmed to N words*; the
+sentence splitter breaks only on terminal punctuation followed by a capital, so an abbreviation such
+as *e.g.* is never a cut point and prose is never cut mid-sentence. An answer past 160 words, or one
+with no whole sentence inside the cap, is refused and asked once more under a two-sentence cap; a
+second such answer is dropped and the page says so rather than printing a wall of prose. `build_narrative_prompt` takes an optional `extra_context`
 string, appended through `narrative_context_lines`, so the delta decomposition and the anomaly lane
 can be handed to the prompt instead of the raw totals.
 
