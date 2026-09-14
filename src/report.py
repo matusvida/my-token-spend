@@ -936,6 +936,29 @@ def _sessions_section(window):
     )
 
 
+WHALE_SAME_COST = 0.01
+
+WHALE_PROMPT_HEAD = 80
+
+
+def collapse_whales(whales):
+    groups = []
+    for finding in sorted(whales, key=lambda f: (-f["weighted_cost"], f["evidence"].get("ts") or "")):
+        head = (finding["evidence"].get("prompt") or "")[:WHALE_PROMPT_HEAD]
+        for group in groups:
+            leader = group[0]
+            if leader["subject"] != finding["subject"]:
+                continue
+            if (leader["evidence"].get("prompt") or "")[:WHALE_PROMPT_HEAD] != head:
+                continue
+            if abs(finding["weighted_cost"] - leader["weighted_cost"]) <= WHALE_SAME_COST * leader["weighted_cost"]:
+                group.append(finding)
+                break
+        else:
+            groups.append([finding])
+    return groups
+
+
 def _whales_section(window):
     whales = [f for f in window["findings"] if f["rule"] == "whale_turns"]
     if not whales:
@@ -943,6 +966,7 @@ def _whales_section(window):
     rows = [
         [
             exact(finding["weighted_cost"]),
+            "1" if len(group) == 1 else "%d near-identical" % len(group),
             finding["evidence"].get("model", "-"),
             finding["evidence"].get("effort") or "-",
             "subagent" if finding["evidence"].get("isSidechain") else "main",
@@ -951,14 +975,16 @@ def _whales_section(window):
             (finding["evidence"].get("ts") or "")[:19].replace("T", " "),
             (finding["evidence"].get("prompt") or "-")[:80],
         ]
-        for finding in whales
+        for group in collapse_whales(whales)
+        for finding in [group[0]]
     ]
     return (
         '<section class="card"><h2>Whale turns</h2>'
         '<p class="sub">The single most expensive assistant turns in this window, with the prompt that '
-        "triggered them.</p><div class=\"table-wrap\">%s</div></section>"
+        "triggered them. Turns in one session that share a prompt head and cost within 1%% of each other "
+        "are one row, counted.</p><div class=\"table-wrap\">%s</div></section>"
         % table(
-            ["weighted", "model", "effort", "lane", "agent", "repo", "when (UTC)", "prompt"],
+            ["weighted", "turns", "model", "effort", "lane", "agent", "repo", "when (UTC)", "prompt"],
             rows,
         )
     )

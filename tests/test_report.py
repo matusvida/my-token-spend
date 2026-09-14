@@ -374,6 +374,32 @@ def test_the_context_chart_footer_states_how_the_turns_were_binned():
     assert "5,233 turns binned to 300 points, each point the max of its bin" in html
 
 
+def test_near_identical_whale_turns_collapse_into_one_counted_row():
+    prompt = "<task-notification> task 41ab finished"
+    findings = [
+        finding("whale_turns", "s1", 6166060.0, ts="2026-09-06T05:40:09+00:00", prompt=prompt, model="opus"),
+        finding("whale_turns", "s1", 6166060.0, ts="2026-09-06T05:40:10+00:00", prompt=prompt, model="opus"),
+        finding("whale_turns", "s1", 6135000.0, ts="2026-09-06T05:40:12+00:00", prompt=prompt, model="opus"),
+        finding("whale_turns", "s2", 5396616.0, ts="2026-09-06T09:53:26+00:00", prompt="build the report", model="opus"),
+    ]
+    html = report._whales_section(make_window(findings=findings))
+    body = html.split("<tbody>")[1]
+    assert body.count("<tr>") == 2
+    assert "3 near-identical" in body
+    assert "6,166,060" in body
+
+
+def test_whale_turns_at_a_different_cost_stay_separate_rows():
+    prompt = "<task-notification> task 41ab finished"
+    findings = [
+        finding("whale_turns", "s1", 6166060.0, ts="2026-09-06T05:40:09+00:00", prompt=prompt, model="opus"),
+        finding("whale_turns", "s1", 4000000.0, ts="2026-09-06T05:40:10+00:00", prompt=prompt, model="opus"),
+    ]
+    body = report._whales_section(make_window(findings=findings)).split("<tbody>")[1]
+    assert body.count("<tr>") == 2
+    assert "near-identical" not in body
+
+
 def test_narrative_is_injected_when_present():
     windows = [make_window()]
     html = report.render_html(windows, windows[0], narrative="Subagents ate the week.\n\n- fewer reviewers")

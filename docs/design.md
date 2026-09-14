@@ -436,6 +436,13 @@ splits the turn's price by token class; redundant reads and loop burn report the
 and the turn count behind the repeat. A builder that cannot ground its line in the records returns
 `None`, and the page says so rather than guessing.
 
+**Whale rows are collapsed before they are drawn.** Three rows at the same weighted cost, seconds
+apart, under one task notification, read as triple counting rather than as parallel tool calls each
+billed the shared cache-create. Whale findings that share a session, the first
+`report.WHALE_PROMPT_HEAD` (80) characters of their prompt, and a cost within `report.WHALE_SAME_COST`
+(1%) of the group's leader become one row carrying the count. Nothing is dropped: the count is on the
+row and the cost shown is per turn.
+
 **Clustering key.** Runs are grouped by `agentId` (skills by `sessionId`, since a skill has no
 invocation id). A run is joined to the `Agent` call that dispatched it on the dispatch prompt: the
 session id plus the first 40 characters of the run's first stored prompt, whitespace-collapsed and
