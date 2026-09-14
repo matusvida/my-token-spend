@@ -634,7 +634,7 @@ def _change_section(window, previous):
             {
                 "delta": row["delta"],
                 "color": _cause_color(row["cause"]),
-                "phrase": clip("%s: %s" % (signed_compact(row["delta"]), row["phrase"]), 52),
+                "phrase": clip(row["phrase"], 46),
                 "tip": "%s (%s lane)\n%s -> %s weighted\ncause: %s"
                 % (
                     row["repo"],
