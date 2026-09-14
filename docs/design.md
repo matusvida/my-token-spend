@@ -1464,6 +1464,14 @@ Six detectors, each with its thresholds under `anomalies` in `config.json`:
 | `unattributed_subagents` | more than `unattributed_share` of subagent weighted spend carries no agent type | that share |
 | `mcp_server_share` | one MCP server is above `mcp_share` of the window | that share |
 
+**The reply-skill action names a file that exists.** `rules.reply_skill_action` resolves the skill
+through `agentfiles.resolve_skill` over the roots `collect` builds once per run, so the card prints
+the installed plugin cache path rather than a guessed fragment. When the file sits inside an
+installed plugin, `agentfiles.plugin_identifier` recovers the `<plugin>@<marketplace>` id and the
+action names the documented lever: `"<id>": false` under `enabledPlugins` in the project's
+`.claude/settings.json`. With nothing resolved it says to exclude the plugin for that project and
+invents neither a key nor a path.
+
 **A session is headless when nothing reads the reply.** `rules.headless_sessions` marks a session by
 its modal `cwd` sitting under one of `headless_cwds`, by any turn whose `entrypoint` is in
 `headless_entrypoints`, or by a first user entry whose `promptSource` is in

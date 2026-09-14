@@ -45,7 +45,15 @@ def installed_plugin_roots(plugins_home):
             install_path = install.get("installPath")
             if not install_path:
                 continue
-            roots.append({"scope": "plugin", "plugin": plugin_name, "path": Path(install_path), "fallback": False})
+            roots.append(
+                {
+                    "scope": "plugin",
+                    "plugin": plugin_name,
+                    "identifier": identifier,
+                    "path": Path(install_path),
+                    "fallback": False,
+                }
+            )
     return roots
 
 
@@ -151,6 +159,18 @@ def resolve_skill(name, roots):
         return path.stem == leaf and path.parent.name in SKILL_DIRS
 
     return _search(roots, SKILL_DIRS, matcher, prefix)
+
+
+def plugin_identifier(path, roots):
+    for root in roots or []:
+        if not root.get("identifier"):
+            continue
+        try:
+            Path(path).relative_to(root["path"])
+        except ValueError:
+            continue
+        return root["identifier"]
+    return None
 
 
 def display_path(path, roots):

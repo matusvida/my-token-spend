@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -8,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import rules
 
 CONFIG = json.loads((Path(__file__).resolve().parents[1] / "src" / "config.default.json").read_text())
+PLUGIN_ID = "prose@fprochazka-claude-code-plugins"
+FRONTMATTER = "---\nname: reply-style\n---\n"
 W = CONFIG["token_class_weights"]
 
 HEADLESS_CWD = "C:\\workspace\\tools\\daily-improvement-review"
@@ -137,10 +140,46 @@ def test_a_reply_skill_below_the_headless_share_is_not_an_anomaly():
     assert found(reply_records(2, 8), key=REPLY) == []
 
 
-def test_the_reply_skill_action_names_the_skill_file_and_the_project():
+def test_the_reply_skill_action_names_no_file_it_cannot_resolve():
     action = found(reply_records(7, 3), key=REPLY)[0]["action"]
-    assert "prose/skills/reply-style/SKILL.md" in action
-    assert "daily-improvement-review" in action
+    assert "SKILL.md" not in action
+    assert "enabledPlugins" not in action
+    assert action == (
+        "Exclude the prose plugin for this project in "
+        + os.path.join(HEADLESS_CWD, ".claude", "settings.json")
+        + "."
+    )
+
+
+def installed_plugin_tree(tmp_path):
+    import agentfiles
+
+    plugins_home = tmp_path / "plugins"
+    cache = plugins_home / "cache" / "fprochazka-claude-code-plugins" / "prose" / "0.1.1"
+    skill_dir = cache / "skills" / "reply-style"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(FRONTMATTER, encoding="utf-8")
+    (plugins_home / "installed_plugins.json").write_text(
+        json.dumps({"plugins": {PLUGIN_ID: [{"installPath": str(cache)}]}}),
+        encoding="utf-8",
+    )
+    roots = agentfiles.default_roots(user_home=tmp_path / "user", plugins_home=plugins_home)
+    return roots, skill_dir / "SKILL.md"
+
+
+def test_the_reply_skill_action_names_the_installed_file_and_the_plugin_key(tmp_path):
+    roots, skill_file = installed_plugin_tree(tmp_path)
+    action = rules.reply_skill_action("prose:reply-style", HEADLESS_CWD, roots)
+    assert str(skill_file) in action
+    assert ('"%s": false under enabledPlugins' % PLUGIN_ID) in action
+    assert os.path.join(HEADLESS_CWD, ".claude", "settings.json") in action
+
+
+def test_the_reply_skill_anomaly_carries_the_resolved_action(tmp_path):
+    roots, skill_file = installed_plugin_tree(tmp_path)
+    item = rules.anomalies(reply_records(7, 3), CONFIG, roots)[0]
+    assert item["key"] == REPLY
+    assert str(skill_file) in item["action"]
 
 
 def test_a_session_marked_headless_by_its_prompt_source_counts_as_headless():

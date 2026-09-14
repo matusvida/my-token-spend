@@ -1,7 +1,9 @@
+import os
 import re
 from collections import Counter, defaultdict
 from datetime import datetime
 
+import agentfiles
 import context
 import text
 
@@ -713,14 +715,32 @@ def headless_sessions(records, settings):
     return headless
 
 
-def skill_file_of(name):
-    parts = str(name).split(":")
-    if len(parts) == 2:
-        return "%s/skills/%s/SKILL.md" % (parts[0], parts[1])
-    return "skills/%s/SKILL.md" % name
+def skill_file_of(name, roots=()):
+    matches = agentfiles.resolve_skill(str(name), roots) if roots else []
+    return str(matches[0]) if matches else None
 
 
-def _reply_skill_headless(records, settings):
+def _settings_file_of(project):
+    if project and os.path.isabs(project):
+        return os.path.join(project, ".claude", "settings.json")
+    return None
+
+
+def reply_skill_action(skill, project, roots=()):
+    path = skill_file_of(skill, roots)
+    identifier = agentfiles.plugin_identifier(path, roots) if path else None
+    settings = _settings_file_of(project)
+    plugin = str(skill).split(":")[0]
+    if identifier and settings:
+        how = 'Set "%s": false under enabledPlugins in %s' % (identifier, settings)
+    elif settings:
+        how = "Exclude the %s plugin for this project in %s" % (plugin, settings)
+    else:
+        how = "Exclude the %s plugin for this project in its .claude/settings.json" % plugin
+    return "%s; the skill file is %s." % (how, path) if path else "%s." % how
+
+
+def _reply_skill_headless(records, settings, roots=()):
     watched = set(settings["reply_skills"])
     if not watched:
         return []
@@ -761,8 +781,7 @@ def _reply_skill_headless(records, settings):
                 },
                 "%.0f%% of the skill's spend sits in headless sessions" % (100 * share),
                 share / settings["reply_headless_share"],
-                "Turn its plugin off for %s in that project's .claude/settings.json; the skill file is %s."
-                % (project, skill_file_of(skill)),
+                reply_skill_action(skill, project, roots),
                 _field_coverage(records, "attributionSkill"),
                 _bars(
                     [
@@ -1052,10 +1071,10 @@ def _mcp_server_share(records, settings):
     return findings
 
 
-def anomalies(records, config):
+def anomalies(records, config, roots=()):
     settings = anomaly_settings(config)
     found = []
-    found.extend(_reply_skill_headless(records, settings))
+    found.extend(_reply_skill_headless(records, settings, roots))
     found.extend(_repeated_tool_input(records, settings))
     found.extend(_context_growth_tool(records, config, settings))
     found.extend(_failing_tool(records, settings))

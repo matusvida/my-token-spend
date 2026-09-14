@@ -9,6 +9,7 @@ from datetime import time as time_of_day
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import agentfiles
 import context
 import cost
 import delta
@@ -615,6 +616,7 @@ def aggregate_window(
     owned_sessions=None,
     previous_window=None,
     booked_cost=None,
+    roots=(),
 ):
     tz = zone(config)
     start_utc, end_utc, boundary_source = window_bounds(start_date, config, instants)
@@ -693,7 +695,7 @@ def aggregate_window(
         ),
         "findings": findings,
         "findings_by_rule": dict(sorted(by_rule.items(), key=lambda kv: -kv[1]["weighted_cost"])),
-        "anomalies": rules.anomalies(records, config),
+        "anomalies": rules.anomalies(records, config, roots),
         "ceiling": ceiling_state,
         "parse": dict(parse_stats, records=len(records)),
     }
@@ -949,9 +951,10 @@ def _previous_aggregate(ordered, start, produced, data_dir):
 
 def _finalize(
     stores, config, store_dir, data_dir, reports_dir, parse_stats, window, samples=None, costs=None,
-    extra_windows=(),
+    extra_windows=(), roots=None,
 ):
     samples = samples or []
+    roots = agentfiles.default_roots() if roots is None else roots
     instants = quota.reset_instants(samples)
     windows = {
         start: sorted(records.values(), key=lambda r: (r["ts"], r["uuid"] or ""))
@@ -1000,6 +1003,7 @@ def _finalize(
             owned_sessions={r["sessionId"] for r in records},
             booked_cost=booked.get(start, {"usd": 0.0, "sessions": set(), "crossing": set()}),
             previous_window=_previous_aggregate(ordered, start, produced, data_dir),
+            roots=roots,
         )
         key = aggregate["window"]["key"]
         produced[start] = aggregate
