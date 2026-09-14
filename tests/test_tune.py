@@ -952,6 +952,23 @@ def test_cost_without_a_proposal_lists_only_components_above_three_percent_of_a_
     assert "loud-agent" in section
     assert "quiet-agent" not in section
     assert "1 further component(s) cleared the" in section
+    assert "in neither a typical nor a peak window" in section
+
+
+def test_cost_without_a_proposal_states_the_typical_or_peak_filter_it_applies(home):
+    starts = ["2026-08-01", "2026-08-08", "2026-08-15", "2026-08-22"]
+    costs = [200000.0, 200000.0, 200000.0, 40000000.0]
+    windows = [
+        window(start=start, end=start, agents=[("spiky-agent", 10, cost)])
+        for start, cost in zip(starts, costs)
+    ]
+    result = build(windows, home)
+    entry = {e["name"]: e for e in result["reported"]}["spiky-agent"]
+    assert entry["typical_weighted"] < result["min_reported_share"] * result["typical_window_weighted"]
+    assert entry["peak_weighted"] >= result["min_reported_share"] * result["typical_window_weighted"]
+    section = tune.render(result).split("9. COST WITHOUT A PROPOSAL")[1]
+    assert "whose typical or peak window cost reaches" in section
+    assert "peaking at" in section
 
 
 def test_the_first_run_says_there_is_nothing_to_compare(home):

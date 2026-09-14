@@ -1459,10 +1459,13 @@ def _render_entry(entry, indent="  "):
     for path in entry["files"]:
         lines.append("%sfile: %s" % (indent, path))
     lines.append(
-        "%stypically %s weighted per window, seen in %d of %d windows, %s turns over %d %s(s)."
+        "%stypically %s weighted per window%s, seen in %d of %d windows, %s turns over %d %s(s)."
         % (
             indent,
             _short(entry["typical_weighted"]),
+            ", peaking at %s" % _short(entry["peak_weighted"])
+            if entry["peak_weighted"] > entry["typical_weighted"]
+            else "",
             entry["windows_present"],
             entry["windows_analysed"],
             "{:,}".format(entry["turns"]),
@@ -1689,8 +1692,8 @@ def render(result):
     lines.append("")
     lines.append("9. COST WITHOUT A PROPOSAL (%d)" % len(result["reported"]))
     lines.append(
-        "   the agents and skills that cost at least %.0f%% of a typical window (%s weighted) and that "
-        "nothing above can propose a change to."
+        "   the agents and skills whose typical or peak window cost reaches %.0f%% of a typical window "
+        "(%s weighted) and that nothing above can propose a change to."
         % (100 * result["min_reported_share"], _short(result["typical_window_weighted"]))
     )
     for entry in result["reported"]:
@@ -1700,8 +1703,8 @@ def render(result):
     lines.extend(
         [
             "",
-            "%d further component(s) cleared the %s weighted floor but stayed below %.0f%% of a typical "
-            "window and are not listed."
+            "%d further component(s) cleared the %s weighted floor but reached %.0f%% of a typical "
+            "window in neither a typical nor a peak window, and are not listed."
             % (
                 result["reported_below_share"],
                 _num(result["min_cost"]),

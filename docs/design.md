@@ -1538,9 +1538,11 @@ shows zeroes rather than a guess.
 
 Two counts keep the rest of the output short. A setting-level proposal worth less than
 `min_saving_share` (1%) of a typical analysed window folds into one counted line instead of a card:
-its blast radius argument is longer than its figure is large. "Cost without a proposal" lists only
-components at or above `min_reported_share` (3%) of a typical window, and states how many cleared the
-weighted floor but not the share.
+its blast radius argument is longer than its figure is large. "Cost without a proposal" lists the
+components whose **typical or peak** window cost reaches `min_reported_share` (3%) of a typical
+window, and states how many cleared the weighted floor but reached that share in neither. An entry
+that qualified on its peak prints the peak beside its typical figure, so a listed component is never
+smaller than the stated filter.
 
 ## What moved since last run
 
