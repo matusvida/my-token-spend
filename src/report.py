@@ -2340,7 +2340,29 @@ def store_narrative(data_dir, key, narrative, note):
     return stored
 
 
+FIELD_PROSE = {
+    "subagent_type": "agent type",
+    "attributionSkill": "skill attribution",
+    "attributionAgent": "agent attribution",
+    "attributionMcpServer": "MCP server",
+    "mcp_server": "MCP server",
+    "mcp_tool": "MCP tool",
+    "isSidechain": "subagent",
+    "result_chars": "tool result size",
+    "sessionId": "session id",
+    "cost-state": "session cost entry",
+    "totalCostUSD": "session cost",
+}
+
+FIELD_PROSE_RE = re.compile("|".join(re.escape(name) for name in sorted(FIELD_PROSE, key=len, reverse=True)))
+
+
+def plain_prose(text):
+    return FIELD_PROSE_RE.sub(lambda match: FIELD_PROSE[match.group(0)], text or "")
+
+
 def _narrative_section(narrative):
+    narrative = plain_prose(narrative)
     narrative = _clip_words(narrative, NARRATIVE_WORDS) if narrative else narrative
     if not narrative:
         return ""
@@ -2683,7 +2705,9 @@ def build_narrative_prompt(
         "one. Never sum "
         "the overlapping findings, and never suggest using fewer subagents - heavy orchestration is the "
         "intended workflow; right-size the workers and the batch size instead. Name the jobs by the "
-        "descriptions above rather than by session hashes. Answer with the paragraph itself and nothing "
+        "descriptions above rather than by session hashes. Never print a field or code identifier such "
+        "as subagent_type, attributionSkill or mcp_server - write agent type, skill attribution, MCP "
+        "server. Answer with the paragraph itself and nothing "
         "else: no preamble, no word or sentence count, no closing remark."
         % (sentences or NARRATIVE_SENTENCES, NARRATIVE_ASK_WORDS)
     )

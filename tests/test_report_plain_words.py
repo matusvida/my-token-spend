@@ -95,3 +95,21 @@ def test_the_unattributed_subagent_action_names_no_field():
     )
     assert "subagent_type" not in report.anomaly_action_text(item)
     assert "without naming an agent type" in report.anomaly_action_text(item)
+
+
+def test_a_narrative_that_names_a_record_field_is_reworded_before_rendering():
+    section = report._narrative_section(
+        "Every one of these subagent turns is missing a subagent_type, and attributionSkill "
+        "is absent too."
+    )
+    assert "subagent_type" not in section
+    assert "attributionSkill" not in section
+    assert "agent type" in section
+    assert "skill attribution" in section
+
+
+def test_the_narrative_prompt_forbids_record_field_names():
+    previous, window, records = pair()
+    prompt = report.build_narrative_prompt(window, previous)
+    assert "subagent_type" in prompt
+    assert "never name a field" in prompt.lower() or "never print a field" in prompt.lower()
