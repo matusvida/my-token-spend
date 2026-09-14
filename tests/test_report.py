@@ -358,6 +358,22 @@ def test_render_html_states_the_precedence_and_the_overlap_warning():
     assert "overlap on purpose" in html
 
 
+def test_the_context_chart_footer_states_how_the_turns_were_binned():
+    chart = {
+        "kind": "context_series",
+        "series": [["2026-08-25T14:00:00+00:00", 200000, 1000, "Bash"]] * 300,
+        "series_points": 5233,
+        "turns": 5233,
+        "threshold": 150000,
+        "compactions": [],
+        "by_tool": [{"tool": "Bash", "tokens": 4667251, "results": 2129}],
+        "top_results": [],
+        "coverage": {},
+    }
+    html = report._context_chart_html(chart)
+    assert "5,233 turns binned to 300 points, each point the max of its bin" in html
+
+
 def test_narrative_is_injected_when_present():
     windows = [make_window()]
     html = report.render_html(windows, windows[0], narrative="Subagents ate the week.\n\n- fewer reviewers")

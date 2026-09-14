@@ -98,6 +98,7 @@ def summarize_session(session, config):
             series.append([record["ts"], _usage(record), round(growth), leader])
 
     series.sort(key=lambda point: point[0])
+    series_points = len(series)
     series = _downsample(series, SERIES_POINTS)
     ordered = sorted(session, key=lambda r: r["ts"])
     excess_tokens = 0
@@ -139,6 +140,7 @@ def summarize_session(session, config):
             "share": (present / len(calls)) if calls else 0.0,
         },
         "series": series,
+        "series_points": series_points,
     }
 
 
@@ -156,7 +158,8 @@ def _downsample(series, limit):
             if point[3]:
                 weights[point[3]] += point[2]
         leader = max(weights, key=weights.get) if weights else None
-        binned.append([bucket[-1][0], bucket[-1][1], sum(point[2] for point in bucket), leader])
+        peak = max(bucket, key=lambda point: point[1])
+        binned.append([peak[0], peak[1], sum(point[2] for point in bucket), leader])
     return binned
 
 

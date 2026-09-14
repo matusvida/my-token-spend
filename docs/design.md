@@ -523,6 +523,12 @@ exactly one tool call, so plotting it would imply a spread that does not exist.
 decomposes the costliest turns by token class. `redundant_reads`, `loop_retry` and the round-trip
 detectors get tables.
 
+**A chart that draws a sample says so.** A session's context series is one point per turn that
+carried context, downsampled to `context.SERIES_POINTS` (300) bins; each bin keeps its largest point
+and the growth of the whole bin, so the peak a reader judges the threshold line against is real. The
+footer states the binning — *5,233 turns binned to 300 points, each point the max of its bin* — so
+the headline turn count can be checked against what the chart actually plots.
+
 **A legend names what is drawn, and only what is readable.** Every colour a chart paints carries a
 legend entry: the context-bloat chart colours the five largest tools and folds the rest, including
 turns led by no single tool, into one grey *other or unattributed* entry. Nothing is listed that has

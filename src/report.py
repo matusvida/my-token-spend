@@ -1467,7 +1467,7 @@ def _context_chart_html(chart):
     note = "x is turn order, not a clock; colour is the tool that grew it"
     if chart.get("compactions"):
         note += "; dashed = %s" % _plural(len(chart["compactions"]), "compaction")
-    note += "."
+    note += ". " + _binning_note(chart)
     rows = [
         [entry["tool"], exact(entry["tokens"]), exact(entry["results"])]
         for entry in chart["by_tool"]
@@ -1478,6 +1478,14 @@ def _context_chart_html(chart):
         esc(note),
         table_view(["tool", "context tokens it grew", "results"], rows, "Numbers"),
     )
+
+
+def _binning_note(chart):
+    turns = chart.get("turns") or chart.get("series_points") or len(chart["series"])
+    drawn = len(chart["series"])
+    if drawn >= (chart.get("series_points") or drawn):
+        return "%s turns, one point each." % exact(turns)
+    return "%s turns binned to %s points, each point the max of its bin." % (exact(turns), exact(drawn))
 
 
 def _timeline_chart_html(chart):
