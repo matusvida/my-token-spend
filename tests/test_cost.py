@@ -69,6 +69,56 @@ def test_window_block_without_any_priced_session_reports_none():
     assert block["priced_sessions"] == 0
 
 
+def test_capture_keeps_the_timestamp_it_was_read_at():
+    captured = cost.capture(entry("s1", 1.5), ts="2026-08-29T10:00:00+00:00")
+    assert captured["ts"] == "2026-08-29T10:00:00+00:00"
+
+
+def test_merge_accumulates_one_cumulative_point_per_timestamp(tmp_path):
+    cost.merge(tmp_path, [cost.capture(entry("s1", 1.0), ts="2026-08-28T10:00:00+00:00")])
+    known = cost.merge(
+        tmp_path,
+        [
+            cost.capture(entry("s1", 1.0), ts="2026-08-28T10:00:00+00:00"),
+            cost.capture(entry("s1", 6.0), ts="2026-08-29T10:00:00+00:00"),
+        ],
+    )
+    assert known["s1"]["points"] == [["2026-08-28T10:00:00+00:00", 1.0], ["2026-08-29T10:00:00+00:00", 6.0]]
+    assert known["s1"]["usd"] == 6.0
+
+
+def test_booking_splits_a_session_across_the_windows_of_its_own_entries(tmp_path):
+    costs = {
+        "s1": {
+            "session": "s1",
+            "usd": 6.0,
+            "models": {},
+            "points": [["2026-08-28T10:00:00+00:00", 1.0], ["2026-08-29T10:00:00+00:00", 6.0]],
+        }
+    }
+    booked = cost.booked_windows(costs, lambda ts: ts[:10])
+    assert booked["2026-08-28"]["usd"] == 1.0
+    assert booked["2026-08-29"]["usd"] == 5.0
+    assert booked["2026-08-28"]["crossing"] == {"s1"}
+    assert booked["2026-08-29"]["crossing"] == {"s1"}
+
+
+def test_booking_falls_back_to_the_owning_window_for_a_session_without_points():
+    costs = {"s1": {"session": "s1", "usd": 4.0, "models": {}}}
+    booked = cost.booked_windows(costs, lambda ts: ts[:10], fallback={"s1": "2026-08-22"})
+    assert booked["2026-08-22"]["usd"] == 4.0
+    assert booked["2026-08-22"]["crossing"] == set()
+
+
+def test_window_block_reports_the_booked_total_and_the_boundary_crossers():
+    booked = {"usd": 5.0, "sessions": {"s1", "s2"}, "crossing": {"s1"}}
+    block = cost.window_block(["s1", "s2", "s3"], {}, booked=booked)
+    assert block["usd"] == 5.0
+    assert block["priced_sessions"] == 2
+    assert block["sessions"] == 3
+    assert block["crossing_sessions"] == 1
+
+
 def test_sessions_are_owned_by_the_window_holding_their_first_record():
     windows = {
         "2026-08-15": [{"sessionId": "s1", "ts": "2026-08-16T10:00:00+00:00"}],

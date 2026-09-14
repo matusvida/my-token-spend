@@ -291,14 +291,20 @@ Pinning an IANA name keeps boundaries stable for someone who moves between zones
 ### `cost.py` — the list-price USD figure
 
 Claude Code writes a `cost-state` entry into the transcript after every turn, carrying the session's
-running `totalCostUSD` and per-model token counts. The last such entry in a session is that session's
-total, so `collect` keeps the last one it has seen per file and merges them into
-`data/session_costs.json`, which is durable and never shrinks: a pruned transcript keeps its price.
+running `totalCostUSD` and per-model token counts. `collect` keeps every such entry it reads, stamped
+with the timestamp of the entry before it, and merges them into `data/session_costs.json`, which is
+durable and never shrinks: a pruned transcript keeps its price. Each session holds the cumulative
+points it has been seen at, plus its highest total for the price calibration.
 
-A window's USD is the sum over the sessions whose **first** record falls inside it, so a session that
-straddles a reset is priced once, in the window it started in. The figure is labelled *list price, as
-`/cost` shows it; not what the subscription bills* everywhere it is shown — it is Claude Code's own
-estimate of what the same tokens would have cost on the API, not a billing figure.
+Because the entries are cumulative, successive points give the USD spent in the interval between
+them. A window's USD is the sum of the intervals whose own timestamp falls inside it, so a session
+that straddles a reset splits its price between the two windows in the proportion its work actually
+fell — within the coarseness of the entries, which is one per CLI exit or resume. A session's first
+point books whole to its own window; a session stored before this booking existed, with no points,
+falls back to the window holding its first record. The tile states how many sessions were priced and
+how many of them crossed a boundary. The figure is labelled *list price, as `/cost` shows it; not
+what the subscription bills* everywhere it is shown — it is Claude Code's own estimate of what the
+same tokens would have cost on the API, not a billing figure.
 
 `collect --calibrate-weights` fits, per model, the four token-class prices that best explain the
 stored session totals (least squares over `input`, `output`, `cache_create`, `cache_read`), divides
@@ -432,6 +438,13 @@ splits the turn's price by token class; redundant reads and loop burn report the
 and the turn count behind the repeat. A builder that cannot ground its line in the records returns
 `None`, and the page says so rather than guessing.
 
+**Whale rows are collapsed before they are drawn.** Three rows at the same weighted cost, seconds
+apart, under one task notification, read as triple counting rather than as parallel tool calls each
+billed the shared cache-create. Whale findings that share a session, the first
+`report.WHALE_PROMPT_HEAD` (80) characters of their prompt, and a cost within `report.WHALE_SAME_COST`
+(1%) of the group's leader become one row carrying the count. Nothing is dropped: the count is on the
+row and the cost shown is per turn.
+
 **Clustering key.** Runs are grouped by `agentId` (skills by `sessionId`, since a skill has no
 invocation id). A run is joined to the `Agent` call that dispatched it on the dispatch prompt: the
 session id plus the first 40 characters of the run's first stored prompt, whitespace-collapsed and
@@ -482,9 +495,9 @@ self-contained HTML page. The reading path is, in order:
 2. **Do these first** — at most three cards, each one claim, the threshold it was counted at, one
    number, a risk and a confidence badge, and a link to its finding's chart. The overlap notice
    appears here, once.
-3. **Why this week looked like this** — the narrative, capped at 120 words. When no narrative
-   exists the section is not rendered at all; one line takes its place naming what writes one, the
-   `claude` CLI on PATH.
+3. **Why this week looked like this** — the narrative, capped at four sentences and 90 words. When
+   no narrative exists neither the heading nor the section is rendered; the header meta line carries
+   one notice instead, naming what writes one, the `claude` CLI on PATH.
 4. **Findings** — one card per finding group, carrying exactly one chart or table as its evidence.
    Everything else, the root-cause line included, sits behind a `<details>`.
 5. **Cost centres** — one ranked bar chart per lane: jobs by dispatch description where recovered,
@@ -519,6 +532,12 @@ exactly one tool call, so plotting it would imply a spread that does not exist.
 decomposes the costliest turns by token class. `redundant_reads`, `loop_retry` and the round-trip
 detectors get tables.
 
+**A chart that draws a sample says so.** A session's context series is one point per turn that
+carried context, downsampled to `context.SERIES_POINTS` (300) bins; each bin keeps its largest point
+and the growth of the whole bin, so the peak a reader judges the threshold line against is real. The
+footer states the binning — *5,233 turns binned to 300 points, each point the max of its bin* — so
+the headline turn count can be checked against what the chart actually plots.
+
 **A legend names what is drawn, and only what is readable.** Every colour a chart paints carries a
 legend entry: the context-bloat chart colours the five largest tools and folds the rest, including
 turns led by no single tool, into one grey *other or unattributed* entry. Nothing is listed that has
@@ -536,7 +555,7 @@ collapsed recommendations overview all go through it.
 `report.visible_words`, which drops every `<details>` body but keeps its `<summary>`, and counts the
 text inside the SVG charts like any other. A test renders a real-shaped fixture window through
 `collect.aggregate_window` and fails above the cap. Three things hold the budget on a busy window:
-the narrative is clipped to `NARRATIVE_WORDS` (120) at render time as well as asked for in the
+the narrative is clipped to `NARRATIVE_WORDS` (90) at render time as well as asked for in the
 prompt, each recommendation group shows its three largest cards and folds the rest into a
 `<details>`, and every chart caps its visible rows — the collapsed remainder is always stated, never
 dropped.
@@ -553,6 +572,18 @@ Loading records is a file read, not an API call, so the format-rebuild pass stay
 After rendering, invokes a single headless Claude call with the window's findings
 to produce the narrative section, and injects the result. If that call fails the
 page still renders, minus the prose.
+
+The call asks for `--output-format text` and reads the child's bytes itself, decoding UTF-8 with
+`errors="replace"` and setting `PYTHONIOENCODING`, so an em dash in the answer cannot arrive as
+mojibake on Windows. The prompt asks for at most `NARRATIVE_SENTENCES` (3) sentences and
+`NARRATIVE_ASK_WORDS` (75) words, deliberately under the refusal threshold, since a model asked for
+exactly the limit lands a word or two over it; it is also told to answer with the paragraph alone,
+because a preamble stating its own word count is what pushed a compliant answer past the cap. An answer
+longer than `NARRATIVE_MAX_SENTENCES` (4) sentences or `NARRATIVE_WORDS` (90) words is refused and
+asked once more under a two-sentence cap; a second over-long answer is dropped and the page says so
+rather than printing a wall of prose. `build_narrative_prompt` takes an optional `extra_context`
+string, appended through `narrative_context_lines`, so the delta decomposition and the anomaly lane
+can be handed to the prompt instead of the raw totals.
 
 Interface: `report.main(argv)`, reached from the CLI as
 `report [--window YYYY-MM-DD] [--no-narrative] [--all] [--refresh-narrative]`.
@@ -650,7 +681,21 @@ The first backfill run computes weighted totals for every historical window,
 windows whose totals cluster at the top of the observed distribution are treated
 as windows where the cap was approached, and the ceiling is derived from that
 cluster. It is an estimate of a habit, not a quota, and every place that shows
-it says so.
+it says so. When any quota sample exists at all, the estimate is labelled
+*estimate, likely low* and states the floor that sample already implies: a single
+utilization reading bounds the real ceiling from below at `spent / utilization`,
+so an estimate under that floor is known to be too small before anything else is
+measured.
+
+**One ceiling, applied everywhere, and a page that says when it moved.** The
+ceiling is computed once per `collect` run over every window, so a closed window
+picks up a fitted ceiling retroactively the moment the fit exists, and its tile
+says so rather than leaving the reader with two denominators for one week. The
+rendered page carries the ceiling and its method in `report-ceiling` and
+`report-ceiling-method` meta tags; the next render compares against them and the
+Verdict states the move once, as *ceiling changed since this page was last
+rendered: 1.4B estimated to 3.3B fitted*. The following render stamps the new
+value, so the notice does not repeat.
 
 Derived figures: percent consumed, current burn rate against the rate sustainable
 for the remainder of the window, and projected exhaustion date.
@@ -844,6 +889,9 @@ ceiling
   latest_pct_is_fresh    true when that sample is younger than fresh_hours
   percent_used           null when no estimate exists
   percent_used_source    quota-sample | ceiling-estimate
+  floor                  spent / utilization from the best quota sample, or null
+  floor_spent            the weighted spend behind that floor
+  floor_pct              the utilization behind that floor
   burn_rate_per_day      weighted / elapsed_days
   remaining_weighted
   sustainable_rate_per_day  remaining budget / days left in the window

@@ -127,6 +127,29 @@ def test_without_a_fit_or_an_override_the_top_cluster_still_wins():
     assert collect.estimate_ceiling(totals, CONFIG, samples=[])["method"] == "top-cluster"
 
 
+def test_a_top_cluster_estimate_records_the_floor_a_quota_sample_implies():
+    totals = {"a": 100.0, "b": 200.0, "c": 300.0}
+    ceiling = collect.estimate_ceiling(totals, CONFIG, samples=[sample(24, 50.0, 700000.0)], instants=INSTANTS, now=NOW)
+    assert ceiling["method"] == "top-cluster"
+    assert ceiling["floor"] == pytest.approx(1400000.0)
+    assert ceiling["floor_spent"] == 700000.0
+    assert ceiling["floor_pct"] == 50.0
+
+
+def test_a_top_cluster_estimate_without_a_sample_records_no_floor():
+    ceiling = collect.estimate_ceiling({"a": 100.0, "b": 200.0, "c": 300.0}, CONFIG, samples=[])
+    assert ceiling.get("floor") is None
+
+
+def test_the_method_text_calls_a_floored_estimate_likely_low():
+    ceiling = collect.estimate_ceiling(
+        {"a": 100.0, "b": 200.0, "c": 300.0}, CONFIG, samples=[sample(24, 50.0, 700000.0)], instants=INSTANTS, now=NOW
+    )
+    text = collect.ceiling_method_text(ceiling)
+    assert "estimate, likely low" in text
+    assert "700,000 spent at 50.0% used" in text
+
+
 def test_too_few_samples_and_too_few_windows_leave_no_ceiling():
     ceiling = collect.estimate_ceiling({"a": 100.0}, CONFIG, samples=on_the_line((24, 60.0)))
     assert ceiling["method"] == "insufficient-data"

@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import cost
 import report
 import rules
 
@@ -357,6 +358,82 @@ def test_render_html_states_the_precedence_and_the_overlap_warning():
     assert "overlap on purpose" in html
 
 
+def test_the_context_chart_footer_states_how_the_turns_were_binned():
+    chart = {
+        "kind": "context_series",
+        "series": [["2026-08-25T14:00:00+00:00", 200000, 1000, "Bash"]] * 300,
+        "series_points": 5233,
+        "turns": 5233,
+        "threshold": 150000,
+        "compactions": [],
+        "by_tool": [{"tool": "Bash", "tokens": 4667251, "results": 2129}],
+        "top_results": [],
+        "coverage": {},
+    }
+    html = report._context_chart_html(chart)
+    assert "5,233 turns binned to 300 points, each point the max of its bin" in html
+
+
+def test_near_identical_whale_turns_collapse_into_one_counted_row():
+    prompt = "<task-notification> task 41ab finished"
+    findings = [
+        finding("whale_turns", "s1", 6166060.0, ts="2026-09-06T05:40:09+00:00", prompt=prompt, model="opus"),
+        finding("whale_turns", "s1", 6166060.0, ts="2026-09-06T05:40:10+00:00", prompt=prompt, model="opus"),
+        finding("whale_turns", "s1", 6135000.0, ts="2026-09-06T05:40:12+00:00", prompt=prompt, model="opus"),
+        finding("whale_turns", "s2", 5396616.0, ts="2026-09-06T09:53:26+00:00", prompt="build the report", model="opus"),
+    ]
+    html = report._whales_section(make_window(findings=findings))
+    body = html.split("<tbody>")[1]
+    assert body.count("<tr>") == 2
+    assert "3 near-identical" in body
+    assert "6,166,060" in body
+
+
+def test_whale_turns_at_a_different_cost_stay_separate_rows():
+    prompt = "<task-notification> task 41ab finished"
+    findings = [
+        finding("whale_turns", "s1", 6166060.0, ts="2026-09-06T05:40:09+00:00", prompt=prompt, model="opus"),
+        finding("whale_turns", "s1", 4000000.0, ts="2026-09-06T05:40:10+00:00", prompt=prompt, model="opus"),
+    ]
+    body = report._whales_section(make_window(findings=findings)).split("<tbody>")[1]
+    assert body.count("<tr>") == 2
+    assert "near-identical" not in body
+
+
+def _ceiling(estimate, method, **extra):
+    return dict(
+        {"estimate": estimate, "method": method, "approximate": True, "percent_used": 52.4,
+         "samples_used": 9, "band_pct": 3.0, "cluster_size": 2, "windows_considered": 4},
+        **extra
+    )
+
+
+def test_a_closed_window_says_the_fitted_ceiling_was_applied_retroactively():
+    window = make_window(is_current=False)
+    window["ceiling"] = _ceiling(3.3e9, "quota-fit")
+    verdict = report.render_html([window], window).split('<section class="card verdict">')[1]
+    assert "applied to this closed window once the fit existed" in verdict
+
+
+def test_an_open_window_does_not_claim_a_retroactive_ceiling():
+    window = make_window()
+    window["ceiling"] = _ceiling(3.3e9, "quota-fit")
+    verdict = report.render_html([window], window).split('<section class="card verdict">')[1]
+    assert "applied to this closed window" not in verdict
+
+
+def test_the_ceiling_change_notice_renders_once(tmp_path):
+    window = make_window()
+    window["ceiling"] = _ceiling(1.43e9, "top-cluster")
+    report.write_report([window], window, None, str(tmp_path))
+    window["ceiling"] = _ceiling(3.3e9, "quota-fit")
+    path = report.write_report([window], window, None, str(tmp_path))
+    changed = Path(path).read_text(encoding="utf-8")
+    assert "ceiling changed since this page was last rendered: 1.4B estimated to 3.3B fitted" in changed
+    again = Path(report.write_report([window], window, None, str(tmp_path))).read_text(encoding="utf-8")
+    assert "ceiling changed since this page was last rendered" not in again
+
+
 def test_narrative_is_injected_when_present():
     windows = [make_window()]
     html = report.render_html(windows, windows[0], narrative="Subagents ate the week.\n\n- fewer reviewers")
@@ -364,11 +441,13 @@ def test_narrative_is_injected_when_present():
     assert "<li>fewer reviewers</li>" in html
 
 
-def test_narrative_absence_is_stated_not_crashed():
+def test_narrative_absence_renders_no_heading_and_one_header_line():
     windows = [make_window()]
-    page = report.render_html(windows, windows[0], narrative=None)
+    page = report.render_html(windows, windows[0], narrative=None, narrative_note="claude CLI not on PATH")
     assert "Why this week looked like this" not in page
-    assert "No narrative: writing one needs the <code>claude</code> CLI on PATH." in page
+    header = page.split("<header>")[1].split("</header>")[0]
+    assert "narrative off: claude not on PATH for the scheduled run" in header
+    assert page.count("narrative off:") == 1
 
 
 def test_build_narrative_prompt_is_small_and_warns_about_summing():
@@ -405,8 +484,8 @@ def test_fetch_narrative_returns_stdout(monkeypatch):
 
     class Result:
         returncode = 0
-        stdout = "  it was the subagents  "
-        stderr = ""
+        stdout = b"  it was the subagents  "
+        stderr = b""
 
     monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: Result())
     text, error = report.fetch_narrative("hi")
@@ -424,6 +503,92 @@ def test_fetch_narrative_treats_an_empty_answer_as_failure(monkeypatch):
 
     monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: Result())
     assert report.fetch_narrative("hi") == (None, "empty response")
+
+
+def test_fetch_narrative_decodes_utf8_output_and_asks_for_plain_text(monkeypatch):
+    monkeypatch.setattr(report.shutil, "which", lambda name: "claude")
+    seen = {}
+
+    class Result:
+        returncode = 0
+        stdout = "opus — the week".encode("utf-8")
+        stderr = b""
+
+    def spy(command, **kwargs):
+        seen["command"] = command
+        seen["kwargs"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(report.subprocess, "run", spy)
+    text, error = report.fetch_narrative("hi")
+    assert error is None
+    assert text == "opus — the week"
+    assert "--output-format" in seen["command"] and "text" in seen["command"]
+    assert seen["kwargs"]["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert not seen["kwargs"].get("text")
+
+
+def test_fetch_narrative_replaces_undecodable_bytes_rather_than_failing(monkeypatch):
+    monkeypatch.setattr(report.shutil, "which", lambda name: "claude")
+
+    class Result:
+        returncode = 0
+        stdout = "opus ".encode("utf-8") + bytes([0x97]) + " the week".encode("utf-8")
+        stderr = b""
+
+    monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: Result())
+    text, error = report.fetch_narrative("hi")
+    assert error is None
+    assert text.startswith("opus ")
+
+
+def test_the_narrative_prompt_caps_the_answer_at_three_sentences():
+    current = make_window()
+    prompt = report.build_narrative_prompt(current, None, [])
+    assert "at most 3 sentences" in prompt
+    assert "at most 2 sentences" in report.build_narrative_prompt(current, None, [], sentences=2)
+
+
+def test_the_narrative_prompt_asks_for_fewer_words_than_it_refuses():
+    prompt = report.build_narrative_prompt(make_window(), None, [])
+    assert "%d words" % report.NARRATIVE_ASK_WORDS in prompt
+    assert report.NARRATIVE_ASK_WORDS < report.NARRATIVE_WORDS
+
+
+def test_the_narrative_prompt_forbids_a_preamble_around_the_paragraph():
+    prompt = report.build_narrative_prompt(make_window(), None, [])
+    assert "no preamble, no word or sentence count" in prompt
+
+
+def test_the_narrative_prompt_carries_the_extra_context_it_is_handed():
+    current = make_window()
+    prompt = report.build_narrative_prompt(current, None, [], extra_context="the Linear MCP doubled")
+    assert "the Linear MCP doubled" in prompt
+
+
+def test_an_over_long_narrative_is_refused_and_asked_again_with_a_shorter_cap(monkeypatch):
+    windows = [make_window()]
+    answers = [" ".join(["word"] * 100), "It was the subagents."]
+    asked = []
+
+    def fake(prompt, timeout=180, model=None):
+        asked.append(prompt)
+        return answers[len(asked) - 1], None
+
+    monkeypatch.setattr(report, "fetch_narrative", fake)
+    text, error = report.narrative_for(windows, windows[0], CONFIG, recommendations=[])
+    assert text == "It was the subagents."
+    assert error is None
+    assert len(asked) == 2
+    assert "at most 2 sentences" in asked[1]
+
+
+def test_a_narrative_still_over_the_cap_after_the_retry_is_dropped(monkeypatch):
+    windows = [make_window()]
+    monkeypatch.setattr(report, "fetch_narrative", lambda prompt, timeout=180, model=None: ("One. Two. Three. Four. Five.", None))
+    text, error = report.narrative_for(windows, windows[0], CONFIG, recommendations=[])
+    assert text is None
+    assert "sentences" in error
 
 
 def test_console_summary_leads_with_the_budget_and_top_causes():
@@ -973,13 +1138,27 @@ def test_the_page_reads_verdict_then_actions_then_findings_then_centres_then_raw
     order = [
         html.index('<section class="card verdict">'),
         html.index("<h2>Do these first</h2>"),
-        html.index("No narrative: writing one needs the"),
         html.index("<h2>Findings</h2>"),
         html.index("<h2>Cost centres</h2>"),
         html.index("<h2>Raw breakdowns</h2>"),
         html.index("<h2>Recommendations</h2>"),
     ]
     assert order == sorted(order)
+
+
+def test_the_list_price_tile_states_its_session_count_and_boundary_crossers():
+    window, records = storm_window()
+    window["cost_usd"] = {
+        "usd": 12.5,
+        "sessions": 4,
+        "priced_sessions": 3,
+        "crossing_sessions": 1,
+        "share": 0.75,
+        "label": cost.LABEL,
+    }
+    html = report.render_html([window], window, recommendations=[recommendation()], analysis=analysed(window, records))
+    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
+    assert "3 sessions, 1 crossing a window boundary" in verdict
 
 
 def test_the_verdict_carries_four_tiles_and_the_burn_line():

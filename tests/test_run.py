@@ -77,6 +77,27 @@ def test_a_session_straddling_the_reset_is_split_across_two_windows(workspace):
     assert new["totals"]["turns"] == 2 and new["totals"]["output"] == 500
 
 
+def test_a_session_straddling_the_reset_splits_its_usd_like_its_weighted_tokens(workspace):
+    lines = [
+        assistant_line("u1", "2026-08-28T20:00:00Z", output=100),
+        cost_state_line("s1", 1.0),
+        assistant_line("u2", "2026-08-29T09:00:00Z", output=200),
+        assistant_line("u3", "2026-08-29T10:00:00Z", output=300),
+        cost_state_line("s1", 6.0),
+    ]
+    (workspace["proj"] / "a.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    run(workspace)
+    old = json.loads((workspace["out"] / "data" / "week_2026_08_22.json").read_text())
+    new = json.loads((workspace["out"] / "data" / "week_2026_08_29.json").read_text())
+    assert old["cost_usd"]["usd"] == 1.0
+    assert new["cost_usd"]["usd"] == 5.0
+    assert old["cost_usd"]["crossing_sessions"] == 1
+    assert new["cost_usd"]["crossing_sessions"] == 1
+    old_share = old["cost_usd"]["usd"] / (old["cost_usd"]["usd"] + new["cost_usd"]["usd"])
+    weighted_share = old["totals"]["weighted"] / (old["totals"]["weighted"] + new["totals"]["weighted"])
+    assert abs(old_share - weighted_share) < 0.01
+
+
 def test_a_run_over_an_empty_corpus_fails_loudly(workspace):
     with pytest.raises(collect.CollectionError):
         run(workspace)
@@ -351,7 +372,7 @@ def test_run_prices_a_window_from_the_cost_state_entries(workspace):
     assert "not what the subscription bills" in block["label"]
 
 
-def test_a_session_is_priced_into_the_window_its_first_record_falls_in(workspace):
+def test_a_session_is_priced_into_the_window_of_the_cost_state_entry(workspace):
     (workspace["proj"] / "a.jsonl").write_text(
         "\n".join(
             [
@@ -365,8 +386,8 @@ def test_a_session_is_priced_into_the_window_its_first_record_falls_in(workspace
     )
     summary = run(workspace)
     by_key = {w["window"]["key"]: w["cost_usd"] for w in summary["windows"]}
-    assert by_key["week_2026_08_15"]["usd"] == 2.0
-    assert by_key["week_2026_08_22"]["usd"] is None
+    assert by_key["week_2026_08_15"]["usd"] is None
+    assert by_key["week_2026_08_22"]["usd"] == 2.0
 
 
 def test_the_cost_store_survives_a_transcript_that_no_longer_carries_the_state(workspace):

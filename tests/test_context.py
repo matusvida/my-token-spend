@@ -279,6 +279,23 @@ def test_a_long_session_series_is_downsampled_for_the_chart():
     assert summary["series"][-1][0] == session[-1]["ts"]
 
 
+def test_a_downsampled_bin_carries_its_largest_point_and_the_count_behind_it():
+    session = [rec(at(0), cache_read=THRESHOLD + 1000) for _ in range(context.SERIES_POINTS + 500)]
+    for i, record in enumerate(session):
+        record["ts"] = "2026-08-25T14:00:%06.3f+00:00" % (i * 0.001)
+    session[5]["cache_read"] = THRESHOLD + 9_000_000
+    summary = growth_of(session)
+    assert summary["series_points"] == context.SERIES_POINTS + 500
+    assert len(summary["series"]) <= context.SERIES_POINTS
+    assert max(point[1] for point in summary["series"]) == THRESHOLD + 9_000_000
+
+
+def test_an_undersampled_series_reports_one_point_per_turn():
+    session = [rec(at(i), cache_read=THRESHOLD + 1000 * i) for i in range(13)]
+    summary = growth_of(session)
+    assert summary["series_points"] == len(summary["series"])
+
+
 def test_compaction_timestamps_are_kept_for_the_chart_markers():
     session = [
         rec(at(0), cache_read=10000),
