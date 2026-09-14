@@ -547,3 +547,18 @@ def test_the_stylesheet_swaps_the_two_renderings_at_narrow_widths():
     assert ".chart-wrap.narrow { display: none; }" in html
     assert ".chart-wrap.wide { display: none; }" in html
     assert ".chart-wrap.narrow svg.chart { min-width: 0; }" in html
+
+
+def test_a_stored_anomaly_action_is_reworded_at_render_time():
+    previous, window, records = pair()
+    window["anomalies"] = [
+        dict(
+            anomaly(key="failing_tool", subject="Bash"),
+            action="Read the failing Bash calls in the round trips table and fix the call site.",
+            anchor="round_trips",
+        )
+    ]
+    records = records + failing_records(records[0])
+    lane = render(previous, window, records).split("What looks wrong")[1].split("</section>")[0]
+    assert "fix the call site" not in lane
+    assert "which runs the failing Bash calls came from" in lane

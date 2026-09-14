@@ -749,8 +749,16 @@ def _coverage_note(coverage):
 ANOMALY_ANCHOR_TEXT = {evidence.ROUND_TRIPS: "round trips table"}
 
 
+ANOMALY_ACTIONS = {rules.FAILING_TOOL: lambda item: rules.failing_tool_action(item["subject"])}
+
+
+def anomaly_action_text(item):
+    build = ANOMALY_ACTIONS.get(item["key"])
+    return build(item) if build else item["action"]
+
+
 def _anomaly_action(item, anchors):
-    action = _inline_code(item["action"])
+    action = _inline_code(anomaly_action_text(item))
     anchor = item.get("anchor")
     phrase = ANOMALY_ANCHOR_TEXT.get(anchor)
     if not phrase:
