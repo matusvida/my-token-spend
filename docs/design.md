@@ -306,7 +306,9 @@ no timestamp on its per-file state, so the points come back only on `collect --r
 version is what makes the upgrade notice ask for that run.
 
 The tile states how many of the window's sessions were priced and how many of them crossed a
-boundary. Below `report.USD_MIN_COVERAGE` (half the window's sessions) the tile is not a price tile
+boundary. A session is booked into a window by the timestamps of its cost entries, which can fall
+after the reset that closed the window holding its turns, so the coverage counts only the booked
+sessions that also have turns here: the share is a true fraction of what the window recorded. Below `report.USD_MIN_COVERAGE` (half the window's sessions) the tile is not a price tile
 at all — a total drawn from a tenth of the sessions is not comparable with one drawn from all of
 them, and two such figures side by side read as an inversion that is really a coverage gap. The slot
 carries a number the data supports instead: unused quota where a fitted quota or a config override

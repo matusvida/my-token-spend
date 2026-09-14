@@ -255,3 +255,18 @@ def test_calibrate_weights_prints_both_sides_and_writes_nothing(monkeypatch, tmp
     assert "configured" in out and "implied" in out
     assert "nothing is written" in out
     assert sorted(path.name for path in Path(data_dir).iterdir()) == before
+
+
+def test_coverage_counts_only_booked_sessions_that_also_have_turns_here():
+    booked = {"usd": 5.0, "sessions": {"s1", "s9"}, "crossing": set()}
+    block = cost.window_block(["s1", "s2"], {}, booked=booked)
+    assert block["priced_sessions"] == 1
+    assert block["share"] == 0.5
+
+
+def test_coverage_never_exceeds_one():
+    booked = {"usd": 5.0, "sessions": {"s7", "s8", "s9"}, "crossing": set()}
+    block = cost.window_block(["s1"], {}, booked=booked)
+    assert block["priced_sessions"] == 0
+    assert block["share"] == 0.0
+    assert block["usd"] == 5.0

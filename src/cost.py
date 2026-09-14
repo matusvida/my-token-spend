@@ -114,8 +114,8 @@ def window_block(session_ids, costs, booked=None):
         usd = round(sum(entry["usd"] for entry in priced), 4) if priced else None
         priced_sessions, crossing = len(priced), 0
     else:
-        priced_sessions = len(booked["sessions"])
-        usd = round(booked["usd"], 4) if priced_sessions else None
+        priced_sessions = len(booked["sessions"] & set(session_ids))
+        usd = round(booked["usd"], 4) if booked["sessions"] else None
         crossing = len(booked["crossing"])
     return {
         "usd": usd,
