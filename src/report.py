@@ -2057,6 +2057,8 @@ NARRATIVE_MAX_SENTENCES = 4
 
 NARRATIVE_RETRY_SENTENCES = 2
 
+NARRATIVE_ASK_WORDS = 75
+
 
 def _clip_words(text, limit):
     words = text.split()
@@ -2398,7 +2400,7 @@ def build_narrative_prompt(
         "intended workflow; right-size the workers and the batch size instead. Name the jobs by the "
         "descriptions above rather than by session hashes. Answer with the paragraph itself and nothing "
         "else: no preamble, no word or sentence count, no closing remark."
-        % (sentences or NARRATIVE_SENTENCES, NARRATIVE_WORDS)
+        % (sentences or NARRATIVE_SENTENCES, NARRATIVE_ASK_WORDS)
     )
     return "\n".join(lines)
 

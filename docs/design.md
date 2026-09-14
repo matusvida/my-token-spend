@@ -573,7 +573,10 @@ page still renders, minus the prose.
 
 The call asks for `--output-format text` and reads the child's bytes itself, decoding UTF-8 with
 `errors="replace"` and setting `PYTHONIOENCODING`, so an em dash in the answer cannot arrive as
-mojibake on Windows. The prompt asks for at most `NARRATIVE_SENTENCES` (3) sentences. An answer
+mojibake on Windows. The prompt asks for at most `NARRATIVE_SENTENCES` (3) sentences and
+`NARRATIVE_ASK_WORDS` (75) words, deliberately under the refusal threshold, since a model asked for
+exactly the limit lands a word or two over it; it is also told to answer with the paragraph alone,
+because a preamble stating its own word count is what pushed a compliant answer past the cap. An answer
 longer than `NARRATIVE_MAX_SENTENCES` (4) sentences or `NARRATIVE_WORDS` (90) words is refused and
 asked once more under a two-sentence cap; a second over-long answer is dropped and the page says so
 rather than printing a wall of prose. `build_narrative_prompt` takes an optional `extra_context`

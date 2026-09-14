@@ -549,6 +549,12 @@ def test_the_narrative_prompt_caps_the_answer_at_three_sentences():
     assert "at most 2 sentences" in report.build_narrative_prompt(current, None, [], sentences=2)
 
 
+def test_the_narrative_prompt_asks_for_fewer_words_than_it_refuses():
+    prompt = report.build_narrative_prompt(make_window(), None, [])
+    assert "%d words" % report.NARRATIVE_ASK_WORDS in prompt
+    assert report.NARRATIVE_ASK_WORDS < report.NARRATIVE_WORDS
+
+
 def test_the_narrative_prompt_forbids_a_preamble_around_the_paragraph():
     prompt = report.build_narrative_prompt(make_window(), None, [])
     assert "no preamble, no word or sentence count" in prompt
