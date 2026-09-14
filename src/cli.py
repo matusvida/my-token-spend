@@ -351,11 +351,14 @@ def cmd_tune(args):
         round_trips=trips,
         current=current,
         open_window=open_window,
+        previous_state=tune.load_state(paths.data_dir(home)),
+        config_path=str(paths.config_path(home)),
     )
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True, default=str))
     else:
         print(tune.render(result), end="")
+    tune.save_state(paths.data_dir(home), result)
     if warning:
         print(warning, file=sys.stderr)
     return 0
