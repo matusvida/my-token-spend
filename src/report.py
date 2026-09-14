@@ -1436,6 +1436,8 @@ def ceiling_tile_note(window):
     ceiling = window["ceiling"]
     if collect.quota_is_known(ceiling):
         note = collect.ceiling_method_text(ceiling)
+        if ceiling.get("estimate"):
+            note = "%s ceiling, %s" % (compact(ceiling["estimate"]), note)
         if ceiling.get("method") == "quota-fit" and not window["window"].get("is_current"):
             note += "; applied to this closed window once the fit existed"
         return note

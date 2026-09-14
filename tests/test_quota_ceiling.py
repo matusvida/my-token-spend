@@ -245,3 +245,38 @@ def test_the_phrase_names_the_quota_only_when_it_is_one():
     top = collect.estimate_ceiling({"a": 100.0, "b": 200.0, "c": 300.0}, CONFIG, samples=[])
     assert collect.ceiling_phrase(top) == "estimated ceiling, from your own heavy weeks"
     assert "quota" not in collect.ceiling_phrase(top)
+
+
+def _fitted(estimate, samples_used=9, method="quota-fit"):
+    return {
+        "estimate": estimate,
+        "method": method,
+        "samples_used": samples_used,
+        "band_pct": 3.0,
+        "percent_used": 65.5,
+    }
+
+
+def test_the_quota_tile_states_the_fitted_value_and_its_sample_count():
+    import report
+
+    window = {"window": {"is_current": True}, "ceiling": _fitted(2.65e9, samples_used=12)}
+    note = report.ceiling_tile_note(window)
+    assert note.startswith("2.6B ceiling, ")
+    assert "fitted from 12 usage samples" in note
+
+
+def test_a_fitted_ceiling_that_moved_more_than_two_percent_fires_the_notice():
+    import report
+
+    stamp = {"ceiling": 3.10e9, "ceiling_method": "quota-fit"}
+    note = report.ceiling_change_note(stamp, _fitted(2.65e9))
+    assert note is not None
+    assert "3.1B fitted to 2.6B fitted" in note
+
+
+def test_a_fitted_ceiling_that_barely_moved_stays_quiet():
+    import report
+
+    stamp = {"ceiling": 3.10e9, "ceiling_method": "quota-fit"}
+    assert report.ceiling_change_note(stamp, _fitted(3.101e9)) is None
