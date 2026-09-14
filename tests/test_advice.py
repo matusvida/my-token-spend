@@ -249,17 +249,6 @@ def test_reset_context_does_not_fire_without_the_rule():
     assert only(advice.recommend(window(), [], CONFIG), "reset_context") == []
 
 
-def test_split_whale_turns_measures_the_excess_over_the_median_whale():
-    findings = [whale("a", 1000000.0), whale("b", 2000000.0), whale("c", 3000000.0), whale("d", 6000000.0)]
-    result = only(advice.recommend(window(100000000.0), findings, CONFIG), "split_whale_turns")
-    assert len(result) == 1
-    median = 2500000.0
-    assert result[0]["weighted_saving"] == pytest.approx((3000000.0 - median) + (6000000.0 - median))
-    assert result[0]["evidence"]["median_weighted"] == median
-    assert result[0]["confidence"] == "low"
-    assert result[0]["performance_risk"] == "low"
-
-
 def test_split_whale_turns_needs_enough_whales_for_a_median():
     assert only(advice.recommend(window(), [whale("a", 9000000.0)], CONFIG), "split_whale_turns") == []
 

@@ -12,7 +12,7 @@ import report
 import rootcause
 
 CONFIG = json.loads((Path(__file__).resolve().parents[1] / "src" / "config.default.json").read_text())
-WORD_CAP = 1500
+WORD_CAP = 1100
 
 TOOLS = ["Bash", "Read", "Grep", "Edit", "Write", "Agent", "Skill", "WebFetch", "Glob"]
 AGENTS = ["general-purpose", "Explore", "code-analyst", "mr-scout", "review-verifier"]
@@ -216,7 +216,7 @@ def test_every_rule_puts_its_own_evidence_on_the_page():
     assert 'id="subagent_storm-0"' in findings
     assert 'id="agent_type_skew-0"' in findings
     assert 'id="model_mismatch"' in findings
-    assert 'id="whale_turns"' in findings
+    assert 'id="whale_turns"' not in findings
     assert 'id="round_trips"' in findings
     assert "threshold" in findings
     assert "counted: 250 output, 200 thinking, 1 tool call" in findings
@@ -226,21 +226,16 @@ def test_every_rule_puts_its_own_evidence_on_the_page():
     assert "x is turn order, not a clock" in findings
 
 
-def test_the_cost_centres_rank_six_lanes_and_state_their_coverage():
+def test_the_cost_centres_rank_three_lanes_and_state_their_coverage():
     window, records, calls = real_shaped()
     html = rendered(window, records, calls)
-    centres = html.split("<h2>Cost centres</h2>")[1].split("<h2>Raw breakdowns</h2>")[0]
-    for lane in (
-        "Jobs, by dispatch description where recovered",
-        "MCP servers",
-        "Plugins",
-        "Skills",
-        "Repos",
-        "Models",
-    ):
+    centres = html.split("<h2>Cost centres</h2>")[1].split("<h2>Do these first</h2>")[0]
+    for lane in ("Jobs, by dispatch description where recovered", "MCP servers", "Skills"):
         assert lane in centres
+    for gone in ("<h3>Plugins</h3>", "<h3>Repos</h3>", "<h3>Models</h3>"):
+        assert gone not in centres
     assert "descriptions recovered for" in centres
-    assert centres.count("recorded on") >= 5
+    assert centres.count("recorded on") >= 2
     assert "smaller job clusters" not in centres
     assert "more general-purpose runs in" in centres
     assert "label derived from tools" in centres
@@ -295,19 +290,10 @@ def test_the_burn_reference_line_is_named_by_the_ceiling_method():
     assert ">quota 2.5B<" not in estimated
 
 
-def test_the_effort_ranking_states_what_its_share_is_measured_on():
-    window, records, calls = real_shaped()
-    html = rendered(window, records, calls)
-    block = html.split("<h3>Effort tiers</h3>")[1].split("<h3>")[0]
-    assert "recorded on 100% of turns." in block
-    assert window["field_coverage"]["effort"]["share"] == 1.0
-
-
 def test_no_ranking_asserts_a_share_with_an_empty_subtitle():
     import re
 
     window, records, calls = real_shaped()
     html = rendered(window, records, calls)
     assert '<p class="sub"></p>' not in html
-    assert re.search(r"<h3>Skills</h3><p class=\"sub\">Recorded on \d+% of turns\.</p>", html)
     assert "<h3>Models</h3><p class=\"sub\">Recorded on every turn.</p>" in html

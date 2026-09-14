@@ -314,48 +314,6 @@ def _reset_context(findings, config):
     ]
 
 
-def _split_whale_turns(findings, settings):
-    whales = _findings_of(findings, "whale_turns")
-    if len(whales) < settings["min_whales_for_median"]:
-        return []
-    median_cost = _median([whale["weighted_cost"] for whale in whales])
-    oversized = [whale for whale in whales if whale["weighted_cost"] > median_cost]
-    if not oversized:
-        return []
-    saving = sum(whale["weighted_cost"] - median_cost for whale in oversized)
-    worst = max(oversized, key=lambda whale: whale["weighted_cost"])
-    return [
-        _recommendation(
-            "split_whale_turns",
-            HYGIENE,
-            worst["subject"],
-            "Split the handful of turns that carry a whole session",
-            "When a prompt asks for several things at once, split it: one ask per turn, and point at the files "
-            "instead of asking the model to find them again.",
-            "The %d largest turns of the window ranged up to %s weighted tokens against a median of %s among "
-            "them. Bringing the %d biggest back to that median is worth this much; the triggering prompt of "
-            "the largest was: %s"
-            % (
-                len(whales),
-                "{:,.0f}".format(worst["weighted_cost"]),
-                "{:,.0f}".format(median_cost),
-                len(oversized),
-                (worst["evidence"].get("prompt") or "not captured").strip()[:120],
-            ),
-            saving,
-            "low",
-            "low",
-            {
-                "whales": len(whales),
-                "median_weighted": median_cost,
-                "oversized": len(oversized),
-                "largest_weighted": worst["weighted_cost"],
-            },
-        )
-    ]
-
-
-
 def _resolve(component, name, roots):
     matches = (
         agentfiles.resolve_agent(name, roots)
@@ -539,7 +497,6 @@ def recommend(window_data, findings, config, roots=None):
     recommendations.extend(_right_size_agent_tier(window_data, findings, config, settings))
     recommendations.extend(_right_size_fan_out(findings, settings))
     recommendations.extend(_reset_context(findings, config))
-    recommendations.extend(_split_whale_turns(findings, settings))
     kept = [item for item in recommendations if item["weighted_saving"] >= settings["min_saving"]]
     kept.extend(_headroom(window_data, findings, config, roots))
     for item in kept:

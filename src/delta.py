@@ -132,11 +132,11 @@ def claim_sentence(rows, total):
     if not rows or not movement:
         return "Nothing moved between the two windows."
     top = max(rows, key=lambda row: abs(row["delta"]))
-    return "%s is %s of the %s movement between the two windows, %s." % (
+    return "%s is %s of the %s weighted movement between the two windows, which ended %s." % (
         top["phrase"][0].upper() + top["phrase"][1:],
         "%.0f%%" % (100 * abs(top["delta"]) / movement),
-        "%s weighted" % _compact(movement),
-        "which ended %s overall" % _signed(total),
+        _compact(movement),
+        _signed(total),
     )
 
 

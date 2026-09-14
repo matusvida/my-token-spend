@@ -14,6 +14,7 @@ import advice
 import charts
 import collect
 import cost
+import delta
 import evidence
 import paths
 import rootcause
@@ -581,14 +582,50 @@ def _cross_week_section(windows, target, ceiling):
     )
 
 
-def _delta_section(previous, current, rows):
-    if previous is None:
+CAUSE_COLORS = dict(zip(CAUSE_PRECEDENCE, charts.CATEGORICAL))
+
+NO_CAUSE = "no rule fired on this slice"
+
+
+def _cause_color(cause):
+    return CAUSE_COLORS.get(cause, charts.OTHER)
+
+
+def _cause_legend(rows):
+    seen = []
+    for row in rows:
+        name = RULE_LABELS.get(row["cause"], NO_CAUSE)
+        if name not in seen:
+            seen.append(name)
+    entries = [
+        {"name": name, "color": charts.OTHER if name == NO_CAUSE else CAUSE_COLORS[_rule_of(name)]}
+        for name in seen
+    ]
+    return legend(entries) if len(entries) > 1 else ""
+
+
+def _rule_of(label):
+    for rule, name in RULE_LABELS.items():
+        if name == label:
+            return rule
+    return None
+
+
+def delta_block(window, previous):
+    stored = window.get("delta")
+    if isinstance(stored, dict):
+        return stored
+    return delta.block(previous, window)
+
+
+def _change_section(window, previous):
+    block = delta_block(window, previous)
+    if not block.get("comparable"):
         return (
-            '<section class="card"><h2>Week-over-week change</h2>'
-            '<p class="sub">No earlier window on disk, so there is nothing to compare against.</p></section>'
+            '<section class="card" id="what-changed"><h2>What changed</h2>'
+            '<p class="sub">%s.</p></section>' % esc((block.get("reason") or "no previous window to compare").rstrip("."))
         )
-    delta = total_delta(previous, current)
-    accounted = sum(row["delta"] for row in rows)
+    rows = block["rows"]
     chart_rows = []
     table_rows = []
     for row in rows:
@@ -596,6 +633,7 @@ def _delta_section(previous, current, rows):
         chart_rows.append(
             {
                 "delta": row["delta"],
+                "color": _cause_color(row["cause"]),
                 "phrase": clip("%s: %s" % (signed_compact(row["delta"]), row["phrase"]), 52),
                 "tip": "%s (%s lane)\n%s -> %s weighted\ncause: %s"
                 % (
@@ -603,7 +641,7 @@ def _delta_section(previous, current, rows):
                     lane,
                     exact(row["before"]),
                     exact(row["after"]),
-                    RULE_LABELS.get(row["cause"], "no rule fired on this slice"),
+                    RULE_LABELS.get(row["cause"], NO_CAUSE),
                 ),
             }
         )
@@ -618,27 +656,106 @@ def _delta_section(previous, current, rows):
             ]
         )
     return (
-        '<section class="card"><h2>%s vs %s: %s weighted, decomposed by cause</h2>'
-        '<p class="sub">Each row is one repo &times; lane slice of the window. The slices are disjoint and '
-        "sum to the total change (%s accounted, %s total), so no cost is counted twice.</p>"
-        '<div class="chart-wrap">%s</div>'
-        '<p class="sub">Cause labels follow a fixed precedence &mdash; %s &mdash; and each slice takes '
-        "<strong>one</strong> cause only. Rule findings overlap by design, so they are never summed here.</p>"
-        "%s</section>"
+        '<section class="card" id="what-changed"><h2>What changed since %s</h2>'
+        '<p class="claim">%s</p>%s<div class="chart-wrap">%s</div>'
+        '<p class="sub">Disjoint repo &times; lane slices, one cause each: %s accounted, %s total.</p>'
+        "%s%s</section>"
         % (
-            esc(current["window"]["key"]),
-            esc(previous["window"]["key"]),
-            esc(signed_compact(delta)),
-            esc(compact(accounted)),
-            esc(compact(delta)),
+            esc(block["previous"]),
+            esc(block["claim"] or ""),
+            _cause_legend(rows),
             svg_diverging_bars(chart_rows),
-            esc(" > ".join(RULE_LABELS[rule] for rule in CAUSE_PRECEDENCE)),
+            esc(signed_compact(block["accounted"])),
+            esc(signed_compact(block["total"])),
+            "<details><summary>Cause precedence</summary><p class=\"sub\">%s</p></details>"
+            % esc(" > ".join(RULE_LABELS[rule] for rule in CAUSE_PRECEDENCE)),
             table_view(
                 ["repo", "lane", "cause", "previous window", "this window", "change"],
                 table_rows,
             ),
         )
     )
+
+
+ANOMALY_LABELS = {
+    "reply_skill_headless": "skill with no reader",
+    "repeated_tool_input": "repeated call",
+    "context_growth_tool": "context growth",
+    "failing_tool": "failing tool",
+    "unattributed_subagents": "unnamed subagents",
+    "mcp_server_share": "MCP server share",
+}
+
+ANOMALY_CARDS = 5
+
+
+def _anomaly_chart(chart):
+    if chart["kind"] == "table":
+        return '<div class="table-wrap">%s</div>' % table(chart["columns"], chart["rows"])
+    rows = [
+        {"label": row["label"], "value": row["value"], "tip": "%s\n%s" % (row["label"], exact(row["value"]))}
+        for row in chart["rows"]
+    ]
+    return '<div class="chart-wrap">%s</div>' % svg_ranked_bars(rows, label_width=320)
+
+
+def compact_basis(basis):
+    return basis.split(",")[0]
+
+
+def _coverage_note(coverage):
+    return "%s on %.0f%% of turns." % (coverage["field"], 100.0 * coverage["share"])
+
+
+def _anomaly_card(item):
+    return (
+        '<div class="finding anomaly" id="anomaly-%s"><div class="finding-head">'
+        '<span class="finding-rule">%s</span><span class="finding-subject">%s</span>'
+        '<span class="finding-cost">%s</span></div>'
+        '<div class="finding-detail">%s.</div>%s'
+        '<div class="finding-threshold">%s</div>'
+        '<p class="chart-note">%s</p></div>'
+        % (
+            esc(item["key"]),
+            esc(ANOMALY_LABELS.get(item["key"], item["key"].replace("_", " "))),
+            esc(str(item["subject"])),
+            esc(compact_basis(item["basis"])),
+            esc(_sentence_case(item["claim"])),
+            _anomaly_chart(item["chart"]),
+            _inline_code(item["action"]),
+            esc(_coverage_note(item["coverage"])),
+        )
+    )
+
+
+def _anomalies_section(window):
+    items = sorted(window.get("anomalies") or [], key=lambda item: (-item["score"], item["key"]))
+    if not items:
+        return (
+            '<section class="card" id="anomalies"><h2>What looks wrong</h2>'
+            '<p class="sub">Nothing outside the usual pattern this week.</p></section>'
+        )
+    shown, rest = items[:ANOMALY_CARDS], items[ANOMALY_CARDS:]
+    tail = (
+        '<p class="sub">%d more below the top five, in the window file.</p>' % len(rest)
+        if rest
+        else ""
+    )
+    return (
+        '<section class="card" id="anomalies"><h2>What looks wrong</h2>'
+        '<p class="sub">Ranked by distance from each threshold, not by cost.</p>%s%s</section>'
+        % ("".join(_anomaly_card(item) for item in shown), tail)
+    )
+
+
+def narrative_context(window, previous=None):
+    lines = []
+    block = delta_block(window, previous) or {}
+    if block.get("claim"):
+        lines.append(block["claim"])
+    for item in sorted(window.get("anomalies") or [], key=lambda item: -item["score"])[:ANOMALY_CARDS]:
+        lines.append("%s. %s" % (_sentence_case(item["claim"]), item["action"]))
+    return "\n".join(lines)
 
 
 def calendar_days(window):
@@ -791,13 +908,12 @@ def _composition_section(window):
     ]
     return (
         '<section class="card"><h2>Where this window went</h2>'
-        "%s%s%s%s%s%s</section>"
+        "%s%s%s%s%s</section>"
         % (
             _breakdown("Main agent vs subagents", "Sidechain turns priced with the same weights.", lane_rows, total, "lane"),
             _breakdown("Subagent types", "Subagent turns only; turns with no attribution are pooled.", agents, total, "agent type"),
             _breakdown("Repos", "By the working directory recorded on each turn.", repos, total, "repo"),
             _breakdown("Models", "Recorded on every turn.", _rows_from(window["by_model"]), total, "model"),
-            _breakdown("Effort tiers", _recorded_on(window, "effort"), _rows_from(window["by_effort"]), total, "effort"),
             _breakdown("Skills", _turn_share(window, window["by_skill"]), _rows_from(window["by_skill"], limit=6), total, "skill"),
         )
     )
@@ -890,7 +1006,7 @@ def _findings_section(window):
     )
 
 
-WORD_CAP = 1500
+WORD_CAP = 1100
 
 TAG = re.compile(r"(<[^>]+>)")
 
@@ -898,7 +1014,7 @@ TAG = re.compile(r"(<[^>]+>)")
 def visible_words(page):
     body = re.search(r"<main>(.*)</main>", page, re.S)
     text = body.group(1) if body else page
-    text = re.sub(r"<(script|style)\b.*?</\1>", " ", text, flags=re.S)
+    text = re.sub(r"<(script|style|svg)\b.*?</\1>", " ", text, flags=re.S)
     kept = []
     depth = 0
     summary = False
@@ -935,6 +1051,8 @@ GROUP_TITLES = [
 ]
 
 GROUP_CARDS = 2
+
+HEADROOM_GROUP = "headroom"
 
 RISK_WORDS = {"none": "no performance risk", "low": "low performance risk", "medium": "medium performance risk"}
 
@@ -995,11 +1113,9 @@ RECOMMENDATION_LABEL_CHARS = 26
 
 
 def _recommendations_section(window, recommendations):
+    recommendations = [item for item in recommendations or [] if item["group"] == HEADROOM_GROUP]
     if not recommendations:
-        return (
-            '<section class="card"><h2>Recommendations</h2>'
-            '<p class="sub">No rule produced a recommendation above the reporting threshold this window.</p></section>'
-        )
+        return ""
     ranked = sorted(recommendations, key=lambda entry: -figure_of(entry)[0])
     bars = [
         {
@@ -1033,14 +1149,11 @@ def _recommendations_section(window, recommendations):
             )
         extra = _protected_agents(window, recommendations) if key == "strategy" else ""
         groups.append(
-            '<div class="rec-group" id="rec-%s"><div class="rec-group-head"><h3>%s</h3>'
-            '<span class="rec-group-note">%s</span></div>%s%s</div>'
-            % (esc(key), esc(title), esc(note), extra, cards)
+            '<div class="rec-group" id="rec-%s"><div class="rec-group-head"><h3>%s</h3></div>%s%s</div>'
+            % (esc(key), esc(title), extra, cards)
         )
     return (
-        '<section class="card"><h2>Recommendations</h2>'
-        '<p class="sub">One rule per figure; they overlap and are <strong>never added into a '
-        "total</strong>.</p>"
+        '<section class="card"><h2>Quota you did not use</h2>'
         '<details><summary>Ranked overview</summary><div class="chart-wrap">%s</div></details>%s%s</section>'
         % (
             svg_ranked_bars(bars, label_width=330),
@@ -1062,70 +1175,6 @@ def _recommendations_section(window, recommendations):
                 ],
                 "Numbers",
             ),
-        )
-    )
-
-
-def _headline_section(window, previous):
-    totals = window["totals"]
-    ceiling = window["ceiling"]
-    main, sidechain = lane_totals(window)
-    delta = total_delta(previous, window)
-    tiles = [
-        (
-            "Percent of %s" % ("quota" if collect.quota_is_known(ceiling) else "ceiling"),
-            percent(ceiling["percent_used"]) if ceiling.get("percent_used") is not None else "unknown",
-            collect.ceiling_method_text(ceiling),
-        ),
-        ("Burn rate", "%s / day" % compact(ceiling.get("burn_rate_per_day") or 0), "over %.2f elapsed days" % window["window"]["elapsed_days"]),
-        budget_tile(ceiling),
-        (
-            "Projected exhaustion",
-            exhaustion_label(ceiling),
-            "reset at %s" % window["window"]["end"],
-        ),
-        ("Turns", exact(totals["turns"]), "%s sessions" % exact(totals["sessions"])),
-        (
-            "Subagent share",
-            percent(100.0 * sidechain / totals["weighted"]) if totals["weighted"] else "-",
-            "%s subagent turns" % exact(totals["sidechain_turns"]),
-        ),
-        (
-            "vs previous window",
-            signed_compact(delta) if delta is not None else "-",
-            previous["window"]["key"] if previous else "no earlier window",
-        ),
-        ("Cache read", compact(totals["cache_read"]), "%s output tokens" % compact(totals["output"])),
-    ]
-    tile_html = "".join(
-        '<div class="tile"><div class="tile-label">%s</div><div class="tile-value">%s</div>'
-        '<div class="tile-note">%s</div></div>' % (esc(label), esc(value), esc(note))
-        for label, value, note in tiles
-    )
-    meter_html = ""
-    if ceiling.get("percent_used") is not None:
-        meter_html = meter(
-            ceiling["percent_used"] / 100.0,
-            "%s of %s weighted tokens (%s), %s remaining"
-            % (
-                percent(ceiling["percent_used"]),
-                compact(ceiling["estimate"]),
-                collect.ceiling_phrase(ceiling),
-                compact(ceiling.get("remaining_weighted") or 0),
-            ),
-        )
-    return (
-        '<section class="card"><div class="hero-value">%s</div>'
-        '<div class="hero-unit">weighted tokens spent in %s (%s to %s, %s)</div>'
-        "%s<div class=\"tiles\">%s</div></section>"
-        % (
-            esc(compact(totals["weighted"])),
-            esc(window["window"]["key"]),
-            esc(window["window"]["start"]),
-            esc(window["window"]["end"]),
-            esc(window["window"]["timezone"]),
-            meter_html,
-            tile_html,
         )
     )
 
@@ -1272,13 +1321,11 @@ REC_RULES = {
     "right_size_agent_tier": "agent_type_skew-0",
     "right_size_fan_out": "subagent_storm-0",
     "reset_context": "context_bloat-0",
-    "split_whale_turns": "whale_turns",
 }
 
 OVERLAP_NOTICE = (
-    '<div class="notice">Savings are upper bounds from single rules, they overlap, and they are never '
-    "added together. Cost is not waste: every figure is the price of work that was done, and the quality "
-    "effect of changing it is not measurable from this data.</div>"
+    '<div class="notice">Savings are upper bounds from single rules; they overlap and are never added '
+    "together. Cost is not waste.</div>"
 )
 
 
@@ -1303,13 +1350,15 @@ def _action_card(item, anchors, config):
         )
     return (
         '<div class="rec"><div><div class="rec-title">%s</div>'
-        '<div class="rec-action">Counted at %s.</div><div class="rec-detail">%s</div></div>'
+        '<div class="rec-action">%s</div>'
+        '<div class="rec-detail">Counted at %s. %s</div></div>'
         '<div class="rec-figures"><div class="rec-saving">%s</div>'
         '<div class="rec-share">%s</div>'
         '<div class="badge risk-%s"><span class="dot"></span>%s</div>'
         '<div class="badge">%s confidence</div></div></div>'
         % (
             esc(item["title"]),
+            _inline_code(item["action"]),
             esc(threshold or "the rule threshold"),
             link,
             esc(compact(figure_of(item)[0])),
@@ -1321,15 +1370,89 @@ def _action_card(item, anchors, config):
     )
 
 
-def _actions_section(recommendations, anchors, config):
-    if not recommendations:
-        return (
-            '<section class="card"><h2>Do these first</h2>'
-            '<p class="sub">No rule cleared the reporting threshold this window.</p>%s</section>'
-            % OVERLAP_NOTICE
+UNCHANGED_POINTS = 2.0
+
+GROWN_POINTS = 5.0
+
+NEW_CARDS = 2
+
+ADVICE_ROWS = 3
+
+
+def _by_kind(items):
+    return {item["kind"]: item for item in items or []}
+
+
+def advice_movement(previous_items, current_items):
+    current = _by_kind(current_items)
+    rows = []
+    for item in previous_items or []:
+        now = current.get(item["kind"])
+        then_share = item["percent_of_window"]
+        now_share = now["percent_of_window"] if now else 0.0
+        movement = now_share - then_share
+        rows.append(
+            {
+                "kind": item["kind"],
+                "title": item["title"],
+                "then": then_share,
+                "now": now_share,
+                "movement": movement,
+                "movement_text": "unchanged"
+                if abs(movement) <= UNCHANGED_POINTS
+                else "%+.1f points" % movement,
+            }
         )
-    cards = "".join(_action_card(item, anchors, config) for item in recommendations[:3])
-    return '<section class="card"><h2>Do these first</h2>%s%s</section>' % (cards, OVERLAP_NOTICE)
+    rows.sort(key=lambda row: -abs(row["movement"]))
+    return rows
+
+
+def new_recommendations(previous_items, current_items):
+    previous = _by_kind(previous_items)
+    fresh = []
+    for item in current_items or []:
+        earlier = previous.get(item["kind"])
+        if earlier is None or item["percent_of_window"] - earlier["percent_of_window"] > GROWN_POINTS:
+            fresh.append(item)
+    fresh.sort(key=lambda item: -item["percent_of_window"])
+    return fresh[:NEW_CARDS]
+
+
+def _advice_rows_html(rows):
+    if not rows:
+        return (
+            '<p class="sub">No advice on last week\'s page, so there is nothing to measure against.</p>'
+        )
+    shown, rest = rows[:ADVICE_ROWS], rows[ADVICE_ROWS:]
+    tail = '<p class="chart-note">%d smaller unchanged.</p>' % len(rest) if rest else ""
+    return '<div class="table-wrap">%s</div>%s' % (
+        table(
+            ["advice on last week's page", "then", "now", "movement"],
+            [
+                [row["title"], percent(row["then"]), percent(row["now"]), row["movement_text"]]
+                for row in shown
+            ],
+        ),
+        tail,
+    )
+
+
+def _actions_section(recommendations, anchors, config, previous_recommendations=None):
+    rows = advice_movement(previous_recommendations, recommendations)
+    fresh = new_recommendations(previous_recommendations, recommendations)
+    cards = (
+        "".join(_action_card(item, anchors, config) for item in fresh)
+        if fresh
+        else '<p class="sub">Nothing new this week.</p>'
+    )
+    return (
+        '<section class="card"><h2>Do these first</h2>'
+        "<h3>Last week&rsquo;s advice</h3>"
+        '<p class="sub">Each figure is that rule&rsquo;s share of its own window; the row shows whether '
+        "the pattern moved.</p>%s"
+        "<h3>New this week</h3>%s%s</section>"
+        % (_advice_rows_html(rows), cards, OVERLAP_NOTICE)
+    )
 
 
 def _legend_of(names, present=None):
@@ -1579,12 +1702,7 @@ def _finding_card(card, window, analysis, store):
     )
     becauses = analysis.get("becauses") or []
     because = becauses[card["index"]] if card["index"] < len(becauses) else None
-    tail = (
-        '<p class="chart-note">Another %s in the raw breakdowns.</p>'
-        % _plural(card["hidden"], RULE_LABELS.get(card["rule"], card["rule"]) + " finding")
-        if card["hidden"]
-        else ""
-    )
+    tail = ""
     return (
         '<div class="finding" id="%s"><div class="finding-head"><span class="finding-rule">%s</span>'
         '<span class="finding-subject">%s</span><span class="finding-cost">%s</span></div>'
@@ -1625,6 +1743,7 @@ def _findings_cards_section(window, analysis, store):
                 "chart": chart,
             }
         )
+    tail = ""
     cards = []
     for card in built:
         if card["rule"] == evidence.ROUND_TRIPS:
@@ -1633,9 +1752,8 @@ def _findings_cards_section(window, analysis, store):
         cards.append(_finding_card(card, window, analysis, store))
     return (
         '<section class="card"><h2>Findings</h2>'
-        '<div class="notice">One chart or table is the evidence. Lenses overlap, are never summed, and '
-        "say what the work was, never why.</div>"
-        "%s</section>" % "".join(cards)
+        '<div class="notice">One chart or table is the evidence. Lenses overlap, are never summed, '
+        "and say what the work was, never why.</div>%s%s</section>" % ("".join(cards), tail)
     )
 
 
@@ -1701,7 +1819,7 @@ def _lanes_section(window, analysis, store):
     total = window["totals"]["weighted"]
     return (
         '<section class="card"><h2>Cost centres</h2>'
-        '<p class="sub">Six rankings of the same window, each footer stating its coverage.</p>%s%s</section>'
+        '<p class="sub">Three rankings, each footer stating its coverage.</p>%s%s</section>'
         % (
             _shortfall_notice(store),
             "".join(_lane_block(lane, total) for lane in analysis["evidence"]["lanes"]),
@@ -1851,8 +1969,7 @@ def _raw_section(parts):
         "<details><summary>%s</summary>%s</details>" % (esc(title), body) for title, body in parts if body
     )
     return (
-        '<section class="card raw"><h2>Raw breakdowns</h2>'
-        '<p class="sub">Separate lenses on the same window, overlapping by design.</p>%s</section>' % blocks
+        '<section class="card raw"><h2>Raw breakdowns</h2>%s</section>' % blocks
     )
 
 
@@ -2038,18 +2155,18 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
     for index, window in enumerate(windows):
         if window["window"]["key"] == target["window"]["key"] and index:
             previous = windows[index - 1]
-    rows = decompose_delta(previous, target) if previous else []
     if recommendations is None:
         recommendations = []
+    previous_recommendations = (
+        advice.recommend(previous, previous["findings"], config) if previous else []
+    )
     parse = target["parse"]
     raw_parts = [
         ("Every window, main agent vs subagents", _cross_week_section(windows, target, target["ceiling"].get("estimate"))),
-        ("Week-over-week change, decomposed by cause", _delta_section(previous, target, rows)),
         ("Burn inside this window", _daily_section(target, target["ceiling"])),
         ("Where this window went", _composition_section(target)),
         ("Top sessions", _sessions_section(target)),
         ("Whale turns", _whales_section(target)),
-        ("Headline tiles", _headline_section(target, previous)),
         ("Rule lenses", _findings_section(target)),
         ("What the big cost centres did", _drilldown_section(analysis, store)),
     ]
@@ -2067,10 +2184,12 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
             ),
             _weights_notice(windows),
             _verdict_section(target, previous, recommendations),
-            _actions_section(recommendations, anchors, config),
+            _change_section(target, previous),
             _narrative_section(narrative),
+            _anomalies_section(target),
             _findings_cards_section(target, analysis, store),
             _lanes_section(target, analysis, store),
+            _actions_section(recommendations, anchors, config, previous_recommendations),
             _raw_section(raw_parts),
             _recommendations_section(target, recommendations),
         ]
@@ -2084,7 +2203,8 @@ def render_html(windows, target, narrative=None, recommendations=None, analysis=
     )
 
 
-def build_narrative_prompt(target, previous, rows, recommendations=None, analysis=None):
+def build_narrative_prompt(target, previous, rows=None, recommendations=None, analysis=None):
+    rows = (delta_block(target, previous) or {}).get("rows") or [] if rows is None else rows
     lines = [
         "You are writing two short paragraphs for a personal Claude Code token-usage report.",
         "Window %s (%s to %s), %s weighted tokens, %s of the ceiling."

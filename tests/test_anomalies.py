@@ -260,10 +260,10 @@ def test_a_tool_below_the_growth_share_is_not_an_anomaly():
     assert found(growth_records(other_chars=40000), key=GROWTH) == []
 
 
-def test_the_growth_action_names_the_tool_and_the_median_size():
-    action = found(growth_records(), key=GROWTH)[0]["action"]
-    assert "Bash" in action
-    assert "39 KB" in action
+def test_the_growth_action_names_the_tool_and_the_claim_the_median_size():
+    item = found(growth_records(), key=GROWTH)[0]
+    assert "Bash" in item["action"]
+    assert "39 KB" in item["claim"]
 
 
 def fail_records(bash_failures, other_failures):

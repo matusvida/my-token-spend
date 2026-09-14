@@ -747,8 +747,8 @@ def _reply_skill_headless(records, settings):
             _anomaly(
                 REPLY_SKILL_HEADLESS,
                 skill,
-                "%s cost %s weighted tokens and %.0f%% of that (%s) ran inside sessions with nobody "
-                "reading the reply" % (skill, f"{bucket['total']:,.0f}", 100 * share, f"{bucket['inside']:,.0f}"),
+                "%s cost %s weighted tokens, %.0f%% of it in sessions with nobody reading the reply"
+                % (skill, f"{bucket['total']:,.0f}", 100 * share),
                 {
                     "weighted": bucket["total"],
                     "headless_weighted": bucket["inside"],
@@ -759,8 +759,8 @@ def _reply_skill_headless(records, settings):
                 },
                 "%.0f%% of the skill's spend sits in headless sessions" % (100 * share),
                 share / settings["reply_headless_share"],
-                "The skill file is %s. Stop loading it where nothing reads the reply: turn its plugin off "
-                "for %s in that project's .claude/settings.json." % (skill_file_of(skill), project),
+                "Turn its plugin off for %s in that project's .claude/settings.json; the skill file is %s."
+                % (project, skill_file_of(skill)),
                 _field_coverage(records, "attributionSkill"),
                 _bars(
                     [
@@ -849,8 +849,7 @@ def _repeated_tool_input(records, settings):
                     },
                     "%.1f identical calls a minute" % per_minute,
                     best[0] / float(minimum),
-                    'The run was dispatched as "%s". Give it a stop condition on %s, or hold the result '
-                    "instead of asking again." % (label, name),
+                    'Give the run dispatched as "%s" a stop condition on %s.' % (label, name),
                     _field_coverage(records, "tools"),
                     _table_chart(
                         ["run", "tool", "repeats", "minutes", "per minute", "from", "to"],
@@ -904,7 +903,7 @@ def _context_growth_tool(records, config, settings):
                 continue
             median_kb = median_bytes / 1024.0
             extra = (
-                " The output limits of the role that dispatched it live in its agent definition."
+                " Its output limits live in the dispatching agent definition."
                 if entry["tool"] == "Bash"
                 else ""
             )
@@ -912,9 +911,8 @@ def _context_growth_tool(records, config, settings):
                 _anomaly(
                     CONTEXT_GROWTH_TOOL,
                     entry["tool"],
-                    "%s results are %.0f%% of the context this session had to re-read: %d results, "
-                    "%.1f MB in all, at a median of %.0f KB each"
-                    % (entry["tool"], 100 * share, entry["results"], total_mb, median_kb),
+                    "%s results are %.0f%% of the context this session re-read: %d results, %.1f MB, "
+                    "median %.0f KB" % (entry["tool"], 100 * share, entry["results"], total_mb, median_kb),
                     {
                         "tool": entry["tool"],
                         "session": summary["session"],
@@ -926,14 +924,13 @@ def _context_growth_tool(records, config, settings):
                     },
                     "%.0f%% of the growth, %.1f MB over %d results" % (100 * share, total_mb, entry["results"]),
                     (share / settings["growth_share"]) * max(size_over, volume_over),
-                    "Cut what %s hands back: pipe it through head, or write it to a file and read the slice "
-                    "you need. It returned %.1f MB across %d results, a median of %.0f KB each.%s"
-                    % (entry["tool"], total_mb, entry["results"], median_kb, extra),
+                    "Cut what %s hands back: pipe it through head, or write a file and read the slice.%s"
+                    % (entry["tool"], extra),
                     dict(summary["tool_results_coverage"], field="tool result sizes"),
                     _bars(
                         [
                             {"label": item["tool"], "value": item["tokens"]}
-                            for item in summary["growth_by_tool"][:6]
+                            for item in summary["growth_by_tool"][:4]
                         ]
                     ),
                 )
@@ -964,20 +961,19 @@ def _failing_tool(records, settings):
         _anomaly(
             FAILING_TOOL,
             name,
-            "%d tool calls came back as an error this window and %d of them (%.0f%%) were %s"
+            "%d tool calls came back as an error, %d of them (%.0f%%) on %s"
             % (total, count, 100 * share, name),
             {"tool": name, "failures": count, "window_failures": total, "share": share},
             "%d failures on one tool" % count,
             count / float(settings["fail_min"]),
-            "Read the failing %s calls in the round-trips table and fix the call site; a tool failing this "
-            "often is being asked for something it cannot do." % name,
+            "Read the failing %s calls in the round-trips table and fix the call site." % name,
             {
                 "field": "tool result status",
                 "present": resolved,
                 "total": calls,
                 "share": (resolved / calls) if calls else 0.0,
             },
-            _bars([{"label": tool_name, "value": hits} for tool_name, hits in failures.most_common(6)]),
+            _bars([{"label": tool_name, "value": hits} for tool_name, hits in failures.most_common(4)]),
         )
     ]
 
@@ -1006,8 +1002,8 @@ def _unattributed_subagents(records, settings):
             },
             "%.0f%% of the subagent lane has no agent type" % (100 * share),
             share / settings["unattributed_share"],
-            "These runs were dispatched without subagent_type, or by a plugin whose agents are not on disk. "
-            "Name the type at the dispatch site and the next window prices them.",
+            "These runs were dispatched without subagent_type, or by a plugin whose agents are not on "
+            "disk. Name the type at the dispatch site.",
             _field_coverage(records, "attributionAgent", sidechain),
             _bars(
                 [
@@ -1040,15 +1036,14 @@ def _mcp_server_share(records, settings):
             _anomaly(
                 MCP_SERVER_SHARE,
                 server,
-                "the %s MCP server cost %s weighted tokens over %d turns, %.1f%% of the window"
+                "the %s MCP server cost %s weighted over %d turns, %.1f%% of the window"
                 % (server, f"{bucket['weighted']:,.0f}", bucket["turns"], 100 * share),
                 {"server": server, "weighted": bucket["weighted"], "turns": bucket["turns"], "share": share},
                 "%.1f%% of the window on one server" % (100 * share),
                 share / settings["mcp_share"],
-                "Narrow what %s is asked for over its %d turns, or drop the server from the projects that "
-                "never query it." % (server, bucket["turns"]),
+                "Narrow what %s is asked for over its %d turns." % (server, bucket["turns"]),
                 _field_coverage(records, "mcp_server"),
-                _bars([{"label": name, "value": entry["weighted"]} for name, entry in ranked[:6]]),
+                _bars([{"label": name, "value": entry["weighted"]} for name, entry in ranked[:4]]),
             )
         )
     return findings
