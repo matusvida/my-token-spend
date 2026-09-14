@@ -531,11 +531,12 @@ self-contained HTML page. The reading path is, in order:
    `advice.recommend` over the previous window's stored aggregate, never off the rendered page, and
    the four largest movements are drawn. *New this week* holds at most `report.NEW_CARDS` (2) cards,
    for recommendations that were absent last week or grew by more than `report.GROWN_POINTS` (5)
-   points; when nothing qualifies it is one line. Both halves are keyed on the row's own **title**:
-   one window emits several `model_downgrade` items, one per model, and keying on kind alone
-   collapsed them onto one row and printed one model's figure against another model's name. Subject
-   alone does not work either, because two rules name a session and a session id is new every week.
-   The overlap notice appears here, once.
+   points; when nothing qualifies it is one line. A recommendation carded as new is dropped from the
+   movement table, so no piece of advice appears twice in the section. Both halves are keyed on the
+   row's own **title**: one window emits several `model_downgrade` items, one per model, and keying
+   on kind alone collapsed them onto one row and printed one model's figure against another model's
+   name. Subject alone does not work either, because two rules name a session and a session id is
+   new every week. The overlap notice appears here, once.
 8. **Raw breakdowns** — the remaining lenses, collapsed. The round-trips table lives here, on a
    `<details>` carrying `id="round_trips"`, because the `failing tool` anomaly card's action sends
    the reader to it. An anomaly whose action names a table declares the anchor; the card links the

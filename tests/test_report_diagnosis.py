@@ -365,6 +365,15 @@ def test_a_recommendation_of_a_kind_seen_before_on_another_subject_is_new():
     assert [item["subject"] for item in report.new_recommendations(previous_items, current)] == [
         "claude-fable-5-1"
     ]
+def test_a_recommendation_carded_as_new_is_not_also_a_movement_row():
+    previous_recs = [advised("right_size_fan_out", "Right-size the biggest fan-outs", 1000.0, 9.4)]
+    current_recs = [advised("right_size_fan_out", "Right-size the biggest fan-outs", 5000.0, 31.2)]
+    assert [item["title"] for item in report.new_recommendations(previous_recs, current_recs)] == [
+        "Right-size the biggest fan-outs"
+    ]
+    block = report._actions_section(current_recs, set(), CONFIG, previous_recs)
+    assert block.count("Right-size the biggest fan-outs") == 1
+    assert "carded as new below" in block
 
 
 def test_one_piece_of_advice_is_tracked_across_windows_by_its_own_title():
@@ -373,3 +382,11 @@ def test_one_piece_of_advice_is_tracked_across_windows_by_its_own_title():
     rows = report.advice_movement(previous_items, current)
     assert rows[0]["now"] == 15.1
     assert abs(rows[0]["movement"] - 7.9) < 1e-9
+
+
+def test_a_movement_row_survives_when_the_recommendation_is_not_carded_as_new():
+    previous_recs = [advised("right_size_fan_out", "Right-size the biggest fan-outs", 1000.0, 9.4)]
+    current_recs = [advised("right_size_fan_out", "Right-size the biggest fan-outs", 1100.0, 10.4)]
+    block = report._actions_section(current_recs, set(), CONFIG, previous_recs)
+    assert "Right-size the biggest fan-outs" in block
+    assert "Nothing new this week" in block

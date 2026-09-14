@@ -1547,10 +1547,12 @@ def new_recommendations(previous_items, current_items):
     return fresh[:NEW_CARDS]
 
 
-def _advice_rows_html(rows):
+def _advice_rows_html(rows, had_previous=False):
     if not rows:
-        return (
-            '<p class="sub">No advice on last week\'s page, so there is nothing to measure against.</p>'
+        return '<p class="sub">%s</p>' % (
+            "Every piece of last week&rsquo;s advice is carded as new below."
+            if had_previous
+            else "No advice on last week&rsquo;s page, so there is nothing to measure against."
         )
     shown, rest = rows[:ADVICE_ROWS], rows[ADVICE_ROWS:]
     tail = '<p class="chart-note">%d smaller unchanged.</p>' % len(rest) if rest else ""
@@ -1567,8 +1569,10 @@ def _advice_rows_html(rows):
 
 
 def _actions_section(recommendations, anchors, config, previous_recommendations=None):
-    rows = advice_movement(previous_recommendations, recommendations)
     fresh = new_recommendations(previous_recommendations, recommendations)
+    repeated = {advice_key(item) for item in fresh}
+    rows = [row for row in advice_movement(previous_recommendations, recommendations)
+            if row["key"] not in repeated]
     cards = (
         "".join(_action_card(item, anchors, config) for item in fresh)
         if fresh
@@ -1580,7 +1584,7 @@ def _actions_section(recommendations, anchors, config, previous_recommendations=
         '<p class="sub">Each figure is that rule&rsquo;s share of its own window; the row shows whether '
         "the pattern moved.</p>%s"
         "<h3>New this week</h3>%s%s</section>"
-        % (_advice_rows_html(rows), cards, OVERLAP_NOTICE)
+        % (_advice_rows_html(rows, bool(previous_recommendations)), cards, OVERLAP_NOTICE)
     )
 
 
