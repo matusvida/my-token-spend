@@ -140,7 +140,7 @@ def _proposal_figures(result):
 def _movement(previous, result):
     rows_now = {(r["component"], r["name"], r["kind"]): r["weighted"] for r in _proposal_figures(result)}
     if not previous:
-        return {"first_run": True, "generated_at": None, "windows": [], "rows": []}
+        return {"first_run": True, "generated_at": None, "windows": [], "rows": [], "same_windows": False}
     rows_then = {
         (r.get("component"), r.get("name"), r.get("kind")): r.get("weighted")
         for r in previous.get("proposals") or []
@@ -157,11 +157,13 @@ def _movement(previous, result):
         for key in set(rows_then) | set(rows_now)
     ]
     rows.sort(key=lambda row: (-max(row["then"] or 0.0, row["now"] or 0.0), row["name"]))
+    windows_then = list(previous.get("windows") or [])
     return {
         "first_run": False,
         "generated_at": previous.get("generated_at"),
-        "windows": previous.get("windows") or [],
+        "windows": windows_then,
         "rows": rows,
+        "same_windows": bool(windows_then) and windows_then == [w["key"] for w in result["windows"]],
     }
 
 
@@ -1228,8 +1230,12 @@ def _render_movement(result, lines):
             )
         )
     lines.append(
-        "   a figure that moved is the priced estimate moving, not a measured saving: the windows "
-        "analysed are different windows."
+        "   a figure that moved is the priced estimate moving, not a measured saving: %s"
+        % (
+            "the same windows re-priced under the data as it stands now."
+            if movement["same_windows"]
+            else "the windows analysed are different windows."
+        )
     )
 
 

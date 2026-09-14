@@ -1073,3 +1073,32 @@ def test_a_decision_that_is_here_on_one_heavy_window_says_so(home):
     windows[0]["by_agent"] = [{"key": "ghost-agent", "turns": 3, "weighted": 9000000.0}]
     rendered = tune.render(build(windows, home))
     assert "it is here on one heavy window of 9.0M, not on a typical one." in rendered
+
+
+def test_what_moved_says_the_windows_are_the_same_when_they_are(home):
+    agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
+    windows = four_windows([20000000.0, 20000000.0, 20000000.0, 20000000.0])
+    previous = {
+        "generated_at": "2026-09-14T09:11:00+00:00",
+        "windows": [w["window"]["key"] for w in windows],
+        "proposals": [{"component": "agent", "name": "mr-scout", "kind": tune.PROPOSAL, "weighted": 1000000.0}],
+    }
+    result = tune.build(windows, CONFIG, roots=roots_for(home), now=NOW, previous_state=previous)
+    assert result["movement"]["same_windows"] is True
+    section = tune.render(result).split("2. WHAT MOVED SINCE LAST RUN")[1].split("3. ")[0]
+    assert "the same windows re-priced under the data as it stands now." in section
+    assert "different windows" not in section
+
+
+def test_what_moved_still_warns_when_the_window_set_changed(home):
+    agent_file(home / ".claude" / "agents", "mr-scout", model="opus")
+    windows = four_windows([20000000.0, 20000000.0, 20000000.0, 20000000.0])
+    previous = {
+        "generated_at": "2026-09-14T09:11:00+00:00",
+        "windows": ["week_2026_07_25"],
+        "proposals": [{"component": "agent", "name": "mr-scout", "kind": tune.PROPOSAL, "weighted": 1000000.0}],
+    }
+    result = tune.build(windows, CONFIG, roots=roots_for(home), now=NOW, previous_state=previous)
+    assert result["movement"]["same_windows"] is False
+    section = tune.render(result).split("2. WHAT MOVED SINCE LAST RUN")[1].split("3. ")[0]
+    assert "the windows analysed are different windows." in section
