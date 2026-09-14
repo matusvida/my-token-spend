@@ -2275,9 +2275,10 @@ def test_the_list_price_tile_refuses_a_figure_it_cannot_cover():
     }
     html = report.render_html([window], window, recommendations=[recommendation()], analysis=analysed(window, records))
     verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
-    assert "list price unavailable: 1 of 102 sessions priced" in verdict
+    assert "List price" not in verdict
     assert "$230.56" not in verdict
     assert cost.LABEL not in verdict
+    assert "cost entries exist for 1 of 102 sessions" in html.split("<h2>Raw breakdowns</h2>")[1]
 
 
 def test_the_page_opens_a_collapsed_section_the_reader_was_sent_to():

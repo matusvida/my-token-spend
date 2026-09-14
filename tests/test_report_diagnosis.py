@@ -416,3 +416,52 @@ def test_a_movement_of_one_point_is_printed_not_called_unchanged():
         [advised("model_downgrade", "Run trivial turns on sonnet", 1000.0, 21.0)],
     )
     assert rows[0]["movement_text"] == "+1.0 points"
+
+
+def priced(window, sessions, priced_sessions, usd=12.5):
+    window["cost_usd"] = {
+        "usd": usd,
+        "sessions": sessions,
+        "priced_sessions": priced_sessions,
+        "crossing_sessions": 0,
+    }
+    return window
+
+
+def test_the_list_price_tile_stays_when_coverage_clears_the_floor():
+    previous, window, records = pair()
+    priced(window, 80, 60)
+    html = render(previous, window, records)
+    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
+    assert "List price" in verdict
+    assert "$12.50" in verdict
+
+
+def test_a_window_under_the_price_floor_shows_unused_quota_instead():
+    previous, window, records = pair()
+    priced(window, 81, 14)
+    window["ceiling"] = dict(window["ceiling"], method="quota-fit", estimate=2000000.0, samples_used=9)
+    html = render(previous, window, records)
+    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
+    assert "List price" not in verdict
+    assert "unavailable" not in verdict
+    assert "Unused quota" in verdict
+
+
+def test_a_window_with_no_quota_and_no_price_counts_sessions_instead():
+    previous, window, records = pair()
+    priced(window, 81, 14)
+    window["ceiling"] = dict(window["ceiling"], method="top-cluster", estimate=2000000.0)
+    html = render(previous, window, records)
+    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
+    assert "List price" not in verdict
+    assert "Sessions" in verdict
+
+
+def test_the_price_coverage_line_moves_into_the_raw_breakdowns():
+    previous, window, records = pair()
+    priced(window, 81, 14)
+    html = render(previous, window, records)
+    raw = html.split("<h2>Raw breakdowns</h2>")[1]
+    assert "14 of 81 sessions" in raw
+    assert "List price" in raw

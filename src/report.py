@@ -1338,6 +1338,44 @@ def usd_value(window):
     return "unknown" if usd is None else "$%.2f" % usd
 
 
+PRICE_ABSENCE_CAUSE = (
+    "Claude Code writes a session's cost only when the session itself records one on exit, so "
+    "sessions still open, resumed into another file, or closed without writing one carry no price."
+)
+
+
+def price_coverage_block(window):
+    block = window.get("cost_usd") or {}
+    gap = usd_coverage_gap(block)
+    if not gap:
+        return ""
+    return '<p class="sub">%s. %s</p>' % (
+        esc("List price is not shown: cost entries exist for %d of %d sessions in this window, under the %d%% floor"
+            % (block.get("priced_sessions") or 0, block.get("sessions") or 0, 100 * USD_MIN_COVERAGE)),
+        esc(PRICE_ABSENCE_CAUSE),
+    )
+
+
+def _third_tile(window, cost_block):
+    if not usd_coverage_gap(cost_block):
+        return _tile("List price", usd_value(window), usd_basis(cost_block))
+    ceiling = window["ceiling"]
+    estimate = ceiling.get("estimate")
+    if collect.quota_is_known(ceiling) and estimate:
+        unused = max(0.0, estimate - window["totals"]["weighted"])
+        return _tile(
+            "Unused quota",
+            compact(unused),
+            "left under the %s ceiling on the tile beside this one" % compact(estimate),
+        )
+    totals = window["totals"]
+    return _tile(
+        "Sessions",
+        exact(totals["sessions"]),
+        "%s turns ran on subagents" % exact(totals.get("sidechain_turns") or 0),
+    )
+
+
 def usd_basis(cost_block):
     label = cost_block.get("label") or cost.LABEL
     gap = usd_coverage_gap(cost_block)
@@ -1432,7 +1470,7 @@ def _verdict_section(window, previous, recommendations, ceiling_change=None):
             compact(totals["weighted"]),
             "%s turns, %s sessions" % (exact(totals["turns"]), exact(totals["sessions"])),
         ),
-        _tile("List price", usd_value(window), usd_basis(cost_block)),
+        _third_tile(window, cost_block),
         _tile(
             "Unattributed subagent spend",
             percent(100.0 * unattributed / sidechain) if sidechain else "-",
@@ -2491,6 +2529,7 @@ def render_html(
         ("Rule lenses", _findings_section(target)),
         ("What the big cost centres did", _drilldown_section(analysis, store)),
         ("Tool round trips", _round_trip_block(evidence_block.get("round_trip_chart")), evidence.ROUND_TRIPS),
+        ("List price coverage", price_coverage_block(target)),
     ]
     anchors = {card["id"] for card in evidence_block.get("cards") or []}
     if evidence_block.get("round_trip_chart"):
