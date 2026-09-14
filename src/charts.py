@@ -308,12 +308,20 @@ def svg_ranked_bars(rows, color="--series-1", label_width=280, row_height=32):
     return "".join(parts)
 
 
-def svg_diverging_bars(rows, label_width=330, row_height=36):
+NARROW_WIDTH = 400
+
+NARROW_ROW_HEIGHT = 54
+
+
+def svg_diverging_bars(rows, label_width=330, row_height=36, stacked=False):
+    width = NARROW_WIDTH if stacked else PLOT_WIDTH
+    if stacked:
+        label_width, row_height = 0, NARROW_ROW_HEIGHT
     height = MARGIN["top"] + row_height * max(1, len(rows)) + 24
     maximum = max([abs(row["delta"]) for row in rows] + [1.0])
-    arm = (PLOT_WIDTH - label_width - 150) / 2
-    centre = label_width + 30 + arm
-    parts = ['<svg viewBox="0 0 %d %d" class="chart" role="img">' % (PLOT_WIDTH, height)]
+    arm = (width - label_width - 150) / 2
+    centre = label_width + 30 + arm if not stacked else width / 2
+    parts = ['<svg viewBox="0 0 %d %d" class="chart" role="img">' % (width, height)]
     parts.append(
         '<line class="baseline" x1="%.2f" y1="%d" x2="%.2f" y2="%.2f"/>'
         % (centre, MARGIN["top"] - 8, centre, MARGIN["top"] + row_height * len(rows) + 4)
@@ -321,12 +329,20 @@ def svg_diverging_bars(rows, label_width=330, row_height=36):
     for index, row in enumerate(rows):
         y = MARGIN["top"] + index * row_height
         bar_height = min(BAR_CAP, row_height - 12)
+        if stacked:
+            y += NARROW_ROW_HEIGHT - bar_height - 14
         length = max(2.0, abs(row["delta"]) / maximum * arm)
         increased = row["delta"] > 0
-        parts.append(
-            '<text class="row-label" x="%d" y="%.2f" text-anchor="end">%s</text>'
-            % (label_width, y + bar_height / 2 + 4, esc(row["phrase"]))
-        )
+        if stacked:
+            parts.append(
+                '<text class="row-label" x="4" y="%.2f" text-anchor="start">%s</text>'
+                % (y - 8, esc(row["phrase"]))
+            )
+        else:
+            parts.append(
+                '<text class="row-label" x="%d" y="%.2f" text-anchor="end">%s</text>'
+                % (label_width, y + bar_height / 2 + 4, esc(row["phrase"]))
+            )
         parts.append(
             '<path class="mark" d="%s" fill="var(%s)" tabindex="0" data-tip="%s"/>'
             % (

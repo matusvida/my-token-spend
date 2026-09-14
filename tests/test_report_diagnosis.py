@@ -82,7 +82,8 @@ def test_the_change_chart_draws_at_most_eight_bars_plus_everything_else():
     window["by_session"] = sessions
     window["delta"] = None
     block = render(previous, window, records).split("What changed")[1].split("</section>")[0]
-    assert block.count('class="mark"') <= 9
+    wide = block.split('chart-wrap wide')[1].split('</div>')[0]
+    assert wide.count('class="mark"') <= 9
     assert "everything else" in block
 
 
@@ -501,3 +502,48 @@ def test_the_failing_tool_action_promises_only_what_the_table_shows():
     lane = html.split("What looks wrong")[1].split("</section>")[0]
     assert "fix the call site" not in lane
     assert "which runs the failing Bash calls came from" in lane
+
+
+def diverging_rows():
+    return [
+        {"phrase": "subagent storm in product-promotion-service", "delta": 4.4e8, "tip": "a"},
+        {"phrase": "context bloat in dynamic-pricing", "delta": -1.2e8, "tip": "b"},
+    ]
+
+
+def test_the_narrow_delta_chart_stacks_the_label_above_the_bar():
+    import charts
+
+    svg = charts.svg_diverging_bars(diverging_rows(), stacked=True)
+    assert 'viewBox="0 0 %d' % charts.NARROW_WIDTH in svg
+    assert 'text-anchor="end"' not in svg.split("</text>")[0]
+    assert svg.count('class="mark"') == 2
+
+
+def test_the_narrow_bars_start_inside_the_narrow_viewbox():
+    import charts
+    import re
+
+    svg = charts.svg_diverging_bars(diverging_rows(), stacked=True)
+    starts = [float(match) for match in re.findall(r'd="M(-?[\d.]+) ', svg)]
+    assert starts
+    assert all(0 < start < charts.NARROW_WIDTH for start in starts)
+
+
+def test_the_change_chart_ships_a_wide_and_a_narrow_rendering():
+    previous, window, records = pair()
+    block = html_of(render(previous, window, records))
+    assert 'class="chart-wrap wide"' in block
+    assert 'class="chart-wrap narrow"' in block
+
+
+def html_of(html):
+    return html.split('id="what-changed"')[1].split("</section>")[0]
+
+
+def test_the_stylesheet_swaps_the_two_renderings_at_narrow_widths():
+    previous, window, records = pair()
+    html = render(previous, window, records)
+    assert ".chart-wrap.narrow { display: none; }" in html
+    assert ".chart-wrap.wide { display: none; }" in html
+    assert ".chart-wrap.narrow svg.chart { min-width: 0; }" in html

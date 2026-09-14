@@ -385,6 +385,12 @@ p { margin: 0 0 12px; }
 .tile.warn { border-left: 3px solid var(--warning); }
 .chart-wrap { overflow-x: auto; }
 svg.chart { width: 100%; min-width: 620px; height: auto; display: block; }
+.chart-wrap.narrow { display: none; }
+.chart-wrap.narrow svg.chart { min-width: 0; }
+@media (max-width: 640px) {
+  .chart-wrap.wide { display: none; }
+  .chart-wrap.narrow { display: block; }
+}
 .grid { stroke: var(--grid); stroke-width: 1; }
 .grid.day { stroke: var(--baseline); stroke-width: 1.5; }
 .baseline { stroke: var(--baseline); stroke-width: 1; }
@@ -668,7 +674,8 @@ def _change_section(window, previous):
         )
     return (
         '<section class="card" id="what-changed"><h2>What changed since %s</h2>'
-        '<p class="claim">%s</p>%s<div class="chart-wrap">%s</div>'
+        '<p class="claim">%s</p>%s<div class="chart-wrap wide">%s</div>'
+        '<div class="chart-wrap narrow">%s</div>'
         '<p class="sub">Disjoint repo &times; lane slices, one cause each: %s accounted, %s total.</p>'
         "%s%s</section>"
         % (
@@ -676,6 +683,7 @@ def _change_section(window, previous):
             esc(block["claim"] or ""),
             _cause_legend(rows),
             svg_diverging_bars(chart_rows),
+            svg_diverging_bars(chart_rows, stacked=True),
             esc(signed_compact(block["accounted"])),
             esc(signed_compact(block["total"])),
             "<details><summary>Cause precedence</summary><p class=\"sub\">%s</p></details>"
