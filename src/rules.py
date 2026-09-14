@@ -519,6 +519,14 @@ def _detector(key, label, count, cost, detail, evidence):
     }
 
 
+def _failure_site(record):
+    lane = record.get("attributionAgent") or record.get("attributionSkill")
+    if not lane:
+        lane = "an unnamed subagent" if record.get("isSidechain") else "the main agent"
+    segments = _path_segments(record.get("cwd"))
+    return "%s in %s" % (lane, segments[-1] if segments else "unknown")
+
+
 def round_trips(records):
     total_weighted = sum(record["weighted"] for record in records)
     total_calls = 0
@@ -534,6 +542,7 @@ def round_trips(records):
     api_error_cost = 0.0
     by_tool = Counter()
     per_tool = defaultdict(lambda: {"failures": 0, "retries": 0, "denied": 0, "weighted": 0.0})
+    per_tool_sites = defaultdict(Counter)
 
     for session in _ordered_sessions(records).values():
         flat = []
@@ -547,10 +556,10 @@ def round_trips(records):
                 total_calls += 1
                 if tool.get("is_error") is not None:
                     resolved_calls += 1
-                flat.append((tool["name"], tool["hash"], share, tool))
+                flat.append((tool["name"], tool["hash"], share, tool, record))
 
         first_failure = {}
-        for position, (name, digest, share, tool) in enumerate(flat):
+        for position, (name, digest, share, tool, record) in enumerate(flat):
             if not tool.get("is_error"):
                 continue
             failed += 1
@@ -559,11 +568,12 @@ def round_trips(records):
             first_failure.setdefault((name, digest), position)
             per_tool[name]["failures"] += 1
             per_tool[name]["weighted"] += share
+            per_tool_sites[name][_failure_site(record)] += 1
             if tool.get("denied"):
                 denied += 1
                 denied_cost += share
                 per_tool[name]["denied"] += 1
-        for position, (name, digest, share, tool) in enumerate(flat):
+        for position, (name, digest, share, tool, _record) in enumerate(flat):
             origin = first_failure.get((name, digest))
             if origin is not None and position > origin and tool.get("is_error"):
                 retried += 1
@@ -613,12 +623,22 @@ def round_trips(records):
         "resolved_calls": resolved_calls,
         "result_coverage": (resolved_calls / total_calls) if total_calls else 0.0,
         "by_tool": sorted(
-            ({"tool": name, **counts} for name, counts in per_tool.items()),
+            (
+                {"tool": name, **counts, **_top_site(per_tool_sites[name])}
+                for name, counts in per_tool.items()
+            ),
             key=lambda row: (-row["weighted"], row["tool"]),
         ),
         "weighted": total_weighted,
         "detectors": detectors,
     }
+
+
+def _top_site(sites):
+    if not sites:
+        return {"site": None, "site_failures": 0}
+    site, hits = sites.most_common(1)[0]
+    return {"site": site, "site_failures": hits}
 
 
 ANOMALY_DEFAULTS = {
@@ -961,6 +981,10 @@ def _context_growth_tool(records, config, settings):
     return findings[:1]
 
 
+def failing_tool_action(name):
+    return "See which runs the failing %s calls came from in the round trips table." % name
+
+
 def _failing_tool(records, settings):
     failures = Counter()
     calls = 0
@@ -988,7 +1012,7 @@ def _failing_tool(records, settings):
             {"tool": name, "failures": count, "window_failures": total, "share": share},
             "%d failures on one tool" % count,
             count / float(settings["fail_min"]),
-            "Read the failing %s calls in the round trips table and fix the call site." % name,
+            failing_tool_action(name),
             {
                 "field": "tool result status",
                 "present": resolved,

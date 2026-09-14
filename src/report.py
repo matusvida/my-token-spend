@@ -1847,7 +1847,14 @@ def _repeat_chart_html(chart):
 
 def _round_trip_chart_html(chart):
     rows = [
-        [row["tool"], exact(row["failures"]), exact(row["retries"]), exact(row["denied"]), exact(row["weighted"])]
+        [
+            row["tool"],
+            exact(row["failures"]),
+            exact(row["retries"]),
+            exact(row["denied"]),
+            exact(row["weighted"]),
+            "%s (%s)" % (row["site"], exact(row["site_failures"])) if row.get("site") else "-",
+        ]
         for row in chart["rows"]
     ]
     note = "An outcome is recorded on %s of %s calls%s." % (
@@ -1858,7 +1865,7 @@ def _round_trip_chart_html(chart):
     if chart["tools"] > len(chart["rows"]):
         note += " Top %d of %d tools." % (len(chart["rows"]), chart["tools"])
     return '<div class="table-wrap">%s</div><p class="chart-note">%s</p>' % (
-        table(["tool", "failed", "failed again", "denied", "weighted"], rows),
+        table(["tool", "failed", "failed again", "denied", "weighted", "most often in"], rows),
         esc(note),
     )
 

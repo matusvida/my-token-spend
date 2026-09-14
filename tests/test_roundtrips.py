@@ -130,7 +130,15 @@ def test_round_trips_break_the_failures_down_per_tool():
         ]
     )
     rows = {row["tool"]: row for row in analysis["by_tool"]}
-    assert rows["Bash"] == {"tool": "Bash", "failures": 2, "retries": 1, "denied": 0, "weighted": 200.0}
+    assert rows["Bash"] == {
+        "tool": "Bash",
+        "failures": 2,
+        "retries": 1,
+        "denied": 0,
+        "weighted": 200.0,
+        "site": "the main agent in unknown",
+        "site_failures": 2,
+    }
     assert rows["Read"]["denied"] == 1
     assert "Glob" not in rows
     assert [row["tool"] for row in analysis["by_tool"]] == ["Bash", "Read"]
@@ -155,3 +163,32 @@ def test_the_round_trip_card_states_window_totals_not_the_visible_rows():
     assert ">6 failed<" in html
     assert "Top 4 of 6 tools." in html
     assert "including calls that failed again on the same input" in html
+
+
+def test_each_tool_row_names_where_its_failures_came_from():
+    analysis = rules.round_trips(
+        [
+            dict(
+                record("u%d" % index, tools=[tool("Bash", "h%d" % index, is_error=True)]),
+                cwd="/workspace/dynamic-pricing",
+                attributionAgent="general-purpose",
+            )
+            for index in range(3)
+        ]
+        + [
+            dict(
+                record("v1", tools=[tool("Bash", "hv", is_error=True)]),
+                cwd="/workspace/alpha",
+                attributionAgent=None,
+            )
+        ]
+    )
+    row = analysis["by_tool"][0]
+    assert row["tool"] == "Bash"
+    assert row["site"] == "general-purpose in dynamic-pricing"
+    assert row["site_failures"] == 3
+
+
+def test_a_failure_with_no_agent_and_no_repo_still_gets_a_site():
+    analysis = rules.round_trips([record("u1", tools=[tool("Bash", "h1", is_error=True)])])
+    assert analysis["by_tool"][0]["site"] == "the main agent in unknown"

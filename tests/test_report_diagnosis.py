@@ -313,7 +313,7 @@ def test_the_failing_tool_action_links_to_the_round_trips_table_on_the_page():
     window["anomalies"] = [
         dict(
             anomaly(key="failing_tool", subject="Bash"),
-            action="Read the failing Bash calls in the round trips table and fix the call site.",
+            action=rules.failing_tool_action("Bash"),
             anchor="round_trips",
         )
     ]
@@ -334,14 +334,14 @@ def test_the_failing_tool_action_drops_the_pointer_when_no_table_is_rendered():
     window["anomalies"] = [
         dict(
             anomaly(key="failing_tool", subject="Bash"),
-            action="Read the failing Bash calls in the round trips table and fix the call site.",
+            action=rules.failing_tool_action("Bash"),
             anchor="round_trips",
         )
     ]
     html = report.render_html([previous, window], window, analysis=None, config=CONFIG)
     lane = html.split("What looks wrong")[1].split("</section>")[0]
     assert "round trips table" not in lane
-    assert "Read the failing Bash calls and fix the call site." in lane
+    assert "See which runs the failing Bash calls came from." in lane
 
 
 def test_two_recommendations_of_one_kind_are_compared_subject_by_subject():
@@ -465,3 +465,39 @@ def test_the_price_coverage_line_moves_into_the_raw_breakdowns():
     raw = html.split("<h2>Raw breakdowns</h2>")[1]
     assert "14 of 81 sessions" in raw
     assert "List price" in raw
+
+
+def failing_records(base, count=6, agent="general-purpose", cwd="/workspace/alpha"):
+    return [
+        dict(
+            base,
+            uuid="f%d" % index,
+            attributionAgent=agent,
+            cwd=cwd,
+            tools=[{"name": "Bash", "hash": "h%d" % index, "result_chars": 10,
+                    "is_error": True, "denied": False}],
+        )
+        for index in range(count)
+    ]
+
+
+def test_the_round_trips_table_names_where_each_tool_failed():
+    previous, window, records = pair()
+    records = records + failing_records(records[0])
+    html = render(previous, window, records)
+    table = html.split("<h2>Raw breakdowns</h2>")[1].split('id="round_trips"')[1]
+    assert "most often in" in table
+    assert "general-purpose in alpha" in table
+
+
+def test_the_failing_tool_action_promises_only_what_the_table_shows():
+    previous, window, records = pair()
+    window["anomalies"] = [
+        dict(anomaly(key="failing_tool", subject="Bash"),
+             action=rules.failing_tool_action("Bash"), anchor="round_trips")
+    ]
+    records = records + failing_records(records[0])
+    html = render(previous, window, records)
+    lane = html.split("What looks wrong")[1].split("</section>")[0]
+    assert "fix the call site" not in lane
+    assert "which runs the failing Bash calls came from" in lane
