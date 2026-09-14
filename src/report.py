@@ -2217,9 +2217,13 @@ def narrative_off_note(note):
     return "narrative off: %s" % (note or "no narrative call has been made for this window")
 
 
+def narrative_was_written(note):
+    return note == NARRATIVE_WRITTEN or (note or "").startswith("narrative trimmed to ")
+
+
 def narrative_status(narrative, note):
     if narrative:
-        if note == NARRATIVE_REUSED or (note or "").startswith("narrative trimmed to "):
+        if note == NARRATIVE_REUSED or narrative_was_written(note):
             return note
         return NARRATIVE_WRITTEN
     return narrative_off_note(note)
@@ -2428,7 +2432,7 @@ def rebuild_stale(
             {
                 "key": key,
                 "from_version": stamp["format_version"] if stamp else None,
-                "narrative_written": note == NARRATIVE_WRITTEN,
+                "narrative_written": narrative_was_written(note),
                 "narrative_reused": note == NARRATIVE_REUSED,
                 "drift": drift,
             }

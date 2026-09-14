@@ -2390,3 +2390,19 @@ def test_a_narrative_over_the_trim_limit_twice_is_dropped(monkeypatch):
     assert text is None
     assert note == "narrative refused twice (200 words)"
     assert len(asked) == 2
+
+
+def test_a_trimmed_narrative_counts_as_written_in_the_rebuild_summary(tmp_path, monkeypatch, capsys):
+    windows = two_windows()
+    data_dir = write_windows(str(tmp_path / "data"), windows)
+    report_dir = str(tmp_path / "reports")
+    answer = " ".join([_sentence(head, 30) for head in ("Alpha", "Beta", "Gamma", "Delta")])
+    monkeypatch.setattr(report, "fetch_narrative", lambda prompt, timeout=180, model=None: (answer, None))
+    argv = ["--data-dir", data_dir, "--report-dir", report_dir]
+    assert report.main(argv) == 0
+    page = Path(os.path.join(report_dir, "week_2026_08_15.html")).read_text(encoding="utf-8")
+    assert "narrative trimmed to 90 words" in page
+    downgrade_stamp(os.path.join(report_dir, "week_2026_08_15.html"))
+    assert report.main(argv + ["--refresh-narrative"]) == 0
+    out = capsys.readouterr().out
+    assert "narrative written on 1, reused on 0" in out
