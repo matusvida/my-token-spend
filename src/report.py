@@ -1297,6 +1297,18 @@ def usd_value(window):
     return "unknown" if usd is None else "$%.2f" % usd
 
 
+def usd_basis(cost_block):
+    label = cost_block.get("label") or cost.LABEL
+    priced = cost_block.get("priced_sessions")
+    if not priced:
+        return label
+    return "%s; %s, %s crossing a window boundary" % (
+        label,
+        text.plural(priced, "session"),
+        exact(cost_block.get("crossing_sessions") or 0),
+    )
+
+
 def reset_label(window):
     return "reset %s UTC" % window["window"]["end_utc"][:16].replace("T", " ")
 
@@ -1337,7 +1349,7 @@ def _verdict_section(window, previous, recommendations):
             compact(totals["weighted"]),
             "%s turns, %s sessions" % (exact(totals["turns"]), exact(totals["sessions"])),
         ),
-        _tile("List price", usd_value(window), cost_block.get("label") or cost.LABEL),
+        _tile("List price", usd_value(window), usd_basis(cost_block)),
         _tile(
             "Unattributed subagent spend",
             percent(100.0 * unattributed / sidechain) if sidechain else "-",

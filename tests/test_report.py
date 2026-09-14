@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import cost
 import report
 import rules
 
@@ -1056,6 +1057,21 @@ def test_the_page_reads_verdict_then_actions_then_findings_then_centres_then_raw
         html.index("<h2>Recommendations</h2>"),
     ]
     assert order == sorted(order)
+
+
+def test_the_list_price_tile_states_its_session_count_and_boundary_crossers():
+    window, records = storm_window()
+    window["cost_usd"] = {
+        "usd": 12.5,
+        "sessions": 4,
+        "priced_sessions": 3,
+        "crossing_sessions": 1,
+        "share": 0.75,
+        "label": cost.LABEL,
+    }
+    html = report.render_html([window], window, recommendations=[recommendation()], analysis=analysed(window, records))
+    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
+    assert "3 sessions, 1 crossing a window boundary" in verdict
 
 
 def test_the_verdict_carries_four_tiles_and_the_burn_line():
