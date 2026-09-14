@@ -345,7 +345,7 @@ never speculates; a rule either fires with a number or does not fire.
 | Model mismatch | Opus/Fable turns that are trivial on all four counts: output at or below `max_output_tokens`, between 1 and `max_tool_calls` tool calls, thinking at or below `max_thinking`, and no `Agent` call among them | Difference between actual cost and the same turn priced at sonnet |
 | Redundant reads | Identical tool input hash re-read repeatedly within a session | Cost of the repeat occurrences, each call charged its share of the turn by `result_chars` |
 | Loop / retry burn | Repeated near-identical tool calls, failed-then-retried sequences | Cost of the redundant attempts, charged the same way |
-| Whale turns | Top N single messages by weighted cost | The turn's own cost, labelled with the triggering user prompt |
+| Whale turns | Top N single messages by weighted cost | The turn's own cost, labelled with the triggering user prompt. Near-identical turns in one session collapse to one counted row, and the table's figure is one of those turns rather than their sum |
 | Headroom | A closed window that ended under `headroom.max_pct` of a **known** quota, with the window before it under the same figure | The quota the window left unused, `ceiling - spent` |
 
 A turn's cost is split across its tool calls in proportion to `result_chars`, so
@@ -472,7 +472,8 @@ truncated at `prompt_label_chars` and often begins with skill boilerplate. It is
 human label, after known boilerplate prefixes are stripped and after `text.repair_mojibake` undoes
 a double UTF-8 encoding in the stored bytes; when what remains is too short to name
 a job the label is derived from the tools, repo and branch instead, and the cluster says which of
-the two it is. Every cluster reports a confidence (`named`, `high`, `medium`, `low`, `single run`,
+the two it is. Rule names reach the reader through `RULE_LABELS` everywhere, the narrative prompt
+included, so internal ids like `context_bloat` never surface in prose. Every cluster reports a confidence (`named`, `high`, `medium`, `low`, `single run`,
 `grouping only`) computed from run count, keyword agreement between the member runs' labels and
 tool coverage; `named` is the top level and means every member run carries an orchestrator
 description, so the label is quoted rather than inferred. A cluster whose runs share tools and repo
@@ -495,7 +496,10 @@ Reads every `data/week_*.json` plus the target window's `data/records/<key>.json
 self-contained HTML page. The reading path is, in order:
 
 1. **Verdict** — four tiles (quota or ceiling used with the method named, weighted spent, list-price
-   USD, the share of subagent spend no agent type claims) over a seven-day burn line against the
+   USD, the share of subagent spend no agent type claims). The last one is a warning, not a stat:
+   above `report.UNATTRIBUTED_WARN_SHARE` (25%) it carries a warning rule and says the runs were
+   dispatched with no `subagent_type`, so nothing further down the page can name them. The tiles sit
+   over a seven-day burn line against the
    ceiling with the reset instant marked. The reference line is labelled *quota* only when the
    ceiling came from a usage sample or a config override, and *estimated ceiling* otherwise, so it
    never contradicts the tile above it. The axis runs over every calendar day from the window start,

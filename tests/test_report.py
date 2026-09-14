@@ -2284,3 +2284,43 @@ def test_the_page_opens_a_collapsed_section_the_reader_was_sent_to():
     page = report.render_html(windows, windows[0])
     assert "hashchange" in page
     assert "box.open = true" in page
+
+
+def test_the_narrative_prompt_names_rules_the_way_the_page_does():
+    item = finding("model_mismatch", "claude-opus-5", 600.0)
+    item["detail"] = "1628 trivial turns on the heaviest model"
+    window = make_window(findings=[item])
+    prompt = report.build_narrative_prompt(window, None, [])
+    assert "model_mismatch" not in prompt
+    assert report.RULE_LABELS["model_mismatch"] in prompt
+
+
+def test_the_whale_table_says_the_figure_is_one_turn_not_the_group():
+    window = make_window(
+        findings=[
+            finding("whale_turns", "s1", 6166060.0, cwd="C:\\workspace\\alpha"),
+        ]
+    )
+    section = report._whales_section(window)
+    assert "weighted each" in section
+    assert "not their sum" in section
+
+
+def test_a_mostly_unnamed_subagent_lane_warns_on_its_tile():
+    window = make_window(total=1000.0)
+    window["totals"]["sidechain_weighted"] = 800.0
+    window["by_agent"] = [{"key": "general-purpose", "turns": 3, "weighted": 100.0}]
+    html = report.render_html([window], window)
+    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
+    assert '<div class="tile warn">' in verdict
+    assert "dispatched with no subagent_type" in verdict
+
+
+def test_a_mostly_named_subagent_lane_does_not_warn():
+    window = make_window(total=1000.0)
+    window["totals"]["sidechain_weighted"] = 800.0
+    window["by_agent"] = [{"key": "general-purpose", "turns": 3, "weighted": 700.0}]
+    html = report.render_html([window], window)
+    verdict = html.split('<section class="card verdict">')[1].split("</section>")[0]
+    assert '<div class="tile warn">' not in verdict
+    assert "dispatched with no subagent_type" not in verdict

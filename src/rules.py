@@ -684,7 +684,8 @@ def _anomaly(key, subject, claim, numbers, basis, score, action, coverage, chart
 
 
 def _bars(rows):
-    return {"kind": "bars", "rows": rows}
+    drawn = [row for row in rows if row["value"]]
+    return {"kind": "bars", "rows": drawn or rows[:1]}
 
 
 def _table_chart(columns, rows):

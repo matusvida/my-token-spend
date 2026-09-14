@@ -428,3 +428,10 @@ def test_the_failure_action_points_at_the_round_trips_anchor():
     assert item["anchor"] == "round_trips"
     assert "round trips table" in item["action"]
     assert "round-trips table" not in item["action"]
+
+
+def test_an_anomaly_bar_chart_draws_no_zero_length_bar():
+    records = [rec(stamp(index), sidechain=True, output=100, uuid="s%d" % index) for index in range(20)]
+    item = found(records, key=UNATTRIBUTED)[0]
+    assert [row["label"] for row in item["chart"]["rows"]] == ["no agent type"]
+    assert all(row["value"] for row in item["chart"]["rows"])

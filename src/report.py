@@ -382,6 +382,7 @@ p { margin: 0 0 12px; }
   margin: 12px 0;
 }
 .notice.ok { border-left-color: var(--good); }
+.tile.warn { border-left: 3px solid var(--warning); }
 .chart-wrap { overflow-x: auto; }
 svg.chart { width: 100%; min-width: 620px; height: auto; display: block; }
 .grid { stroke: var(--grid); stroke-width: 1; }
@@ -1014,9 +1015,10 @@ def _whales_section(window):
         '<section class="card"><h2>Whale turns</h2>'
         '<p class="sub">The single most expensive assistant turns in this window, with the prompt that '
         "triggered them. Turns in one session that share a prompt head and cost within 1%% of each other "
-        "are one row, counted.</p><div class=\"table-wrap\">%s</div></section>"
+        "are one row, counted; the weighted figure is one of those turns, not their sum."
+        "</p><div class=\"table-wrap\">%s</div></section>"
         % table(
-            ["weighted", "turns", "model", "effort", "lane", "agent", "repo", "when (UTC)", "prompt"],
+            ["weighted each", "turns", "model", "effort", "lane", "agent", "repo", "when (UTC)", "prompt"],
             rows,
         )
     )
@@ -1275,11 +1277,22 @@ def _because_block(because, analysis, store):
     )
 
 
-def _tile(label, value, note):
+UNATTRIBUTED_WARN_SHARE = 0.25
+
+
+def _tile(label, value, note, warn=False):
     return (
-        '<div class="tile"><div class="tile-label">%s</div><div class="tile-value">%s</div>'
-        '<div class="tile-note">%s</div></div>' % (esc(label), esc(value), esc(note))
+        '<div class="tile%s"><div class="tile-label">%s</div><div class="tile-value">%s</div>'
+        '<div class="tile-note">%s</div></div>'
+        % (" warn" if warn else "", esc(label), esc(value), esc(note))
     )
+
+
+def unattributed_note(unattributed, sidechain):
+    note = "of %s weighted on subagents" % compact(sidechain)
+    if sidechain and unattributed / sidechain > UNATTRIBUTED_WARN_SHARE:
+        return "%s, dispatched with no subagent_type" % note
+    return note
 
 
 def unattributed_subagent(window):
@@ -1405,7 +1418,8 @@ def _verdict_section(window, previous, recommendations, ceiling_change=None):
         _tile(
             "Unattributed subagent spend",
             percent(100.0 * unattributed / sidechain) if sidechain else "-",
-            "of %s weighted on subagents" % compact(sidechain),
+            unattributed_note(unattributed, sidechain),
+            warn=bool(sidechain) and unattributed / sidechain > UNATTRIBUTED_WARN_SHARE,
         ),
     ]
     return (
@@ -2498,7 +2512,10 @@ def build_narrative_prompt(
             )
     lines.append("Recommendations already derived from the rules, ranked:")
     for finding in sorted(target["findings"], key=lambda f: -f["weighted_cost"])[:6]:
-        lines.append("- %s: %s (%s weighted)" % (finding["rule"], finding["detail"], compact(finding["weighted_cost"])))
+        lines.append(
+            "- %s: %s (%s weighted)"
+            % (RULE_LABELS.get(finding["rule"], finding["rule"]), finding["detail"], compact(finding["weighted_cost"]))
+        )
     jobs = (((analysis or {}).get("evidence") or {}).get("lanes") or [{}])[0].get("rows") or []
     if jobs:
         lines.append("Jobs this window, named by the description the orchestrator dispatched them with:")
